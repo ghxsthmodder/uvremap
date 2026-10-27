@@ -81,6 +81,7 @@ struct Primitive {
     int material = -1;       // index into Model::materials, -1 = none
     std::vector<SourceVertex> vertices;
     std::vector<uint32_t> indices;  // triangle list, multiple of 3
+    int rawMode = 4;                // glTF primitive mode as authored (4/5/6 seen)
     bool hasMorphTargets = false;
     std::vector<std::string> extensionNames;  // primitive-level extensions (draco etc.)
     int jointsComponentType = 5123;  // TINYGLTF UNSIGNED_SHORT default

@@ -20,6 +20,32 @@ namespace fs = std::filesystem;
 
 namespace uvremap {
 
+std::vector<uint32_t> triangulateIndices(int mode, const std::vector<uint32_t>& in) {
+    if (mode != 5 && mode != 6) return in;
+    std::vector<uint32_t> out;
+    if (mode == 5) {  // TRIANGLE_STRIP: alternate winding per new triangle
+        for (size_t i = 0; i + 2 < in.size(); i++) {
+            if (i % 2 == 0) {
+                out.push_back(in[i]);
+                out.push_back(in[i + 1]);
+                out.push_back(in[i + 2]);
+            } else {
+                out.push_back(in[i]);
+                out.push_back(in[i + 2]);
+                out.push_back(in[i + 1]);
+            }
+        }
+    } else {  // TRIANGLE_FAN
+        if (in.size() >= 3)
+            for (size_t i = 1; i + 1 < in.size(); i++) {
+                out.push_back(in[0]);
+                out.push_back(in[i]);
+                out.push_back(in[i + 1]);
+            }
+    }
+    return out;
+}
+
 namespace {
 
 // ---------------------------------------------------------------- utilities
@@ -481,6 +507,15 @@ struct GltfDocument::Impl {
                     idx.resize(vertCount);
                     for (size_t v = 0; v < vertCount; v++) idx[v] = uint32_t(v);
                 }
+                p.rawMode = tp.mode;
+                if (tp.mode == 5 || tp.mode == 6) {
+                    idx = triangulateIndices(tp.mode, idx);
+                } else if (tp.mode != 4) {
+                    rep.warn("mesh[" + std::to_string(mi) + "]/prim[" + std::to_string(pi) +
+                             "]: primitive mode " + std::to_string(tp.mode) +
+                             " is not a triangle primitive; left unchanged");
+                    continue;
+                }
                 idx.resize(idx.size() / 3 * 3);  // triangle list
                 p.indices = std::move(idx);
                 if (p.indices.empty()) {
@@ -883,6 +918,7 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
                     addBufferViewAccessor(tg, bw, perSet[k], TINYGLTF_COMPONENT_TYPE_FLOAT,
                                           TINYGLTF_TYPE_VEC2, n, 34962, nullptr, nullptr);
             tp.indices = addIndicesAccessor(tg, bw, rp.indices);
+            tp.mode = 4;  // rebuilt from a triangle list (was possibly strip/fan)
 
             if (cp.material >= 0) {
                 auto it = clonedMats.find({int(ai), cp.material});

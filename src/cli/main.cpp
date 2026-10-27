@@ -231,7 +231,11 @@ int cmdScan(LoadResult& L, const Args& a) {
                   << " verts, " << p.indices.size() / 3 << " tris, material "
                   << (p.material < 0 ? "(none)" : std::to_string(p.material)) << ", "
                   << uvSets << " UV set(s)"
-                  << (p.hasMorphTargets ? ", morph targets" : "") << "\n";
+                  << (p.hasMorphTargets ? ", morph targets" : "")
+                  << (p.rawMode == 5 ? ", authored TRIANGLE_STRIP (converted)"
+                                      : p.rawMode == 6 ? ", authored TRIANGLE_FAN (converted)"
+                                                       : "")
+                  << "\n";
     }
     std::cout << "\nMaterials: " << m.materials.size() << "\n";
     for (size_t i = 0; i < m.materials.size(); i++) {

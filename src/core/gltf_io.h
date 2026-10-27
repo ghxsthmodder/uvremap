@@ -9,6 +9,10 @@
 
 namespace uvremap {
 
+// Expands TRIANGLE_STRIP (5) / TRIANGLE_FAN (6) index lists into triangle
+// lists (4), preserving winding; other modes are returned unchanged.
+std::vector<uint32_t> triangulateIndices(int mode, const std::vector<uint32_t>& in);
+
 struct SaveOptions {
     std::string outputDir;       // directory where model + assets are written
     std::string modelFilename;   // e.g. "model.gltf" / "model.glb"
