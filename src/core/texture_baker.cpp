@@ -135,11 +135,16 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                 trianglesUnmapped++;
                 continue;
             }
-            // Match new-triangle corners to source-triangle corners by canonical input index.
+            // Match new-triangle corners to source-triangle corners. Chart xrefs
+            // may name a colocal twin of the corner the source triangle indexes,
+            // so compare canonicalized on both sides; sampling still uses the
+            // source triangle's own (raw) corner indices via the slot number.
             uint32_t xref[3] = {gen.canonical(gm.primId, g0.xref),
                                 gen.canonical(gm.primId, g1.xref),
                                 gen.canonical(gm.primId, g2.xref)};
-            uint32_t sc[3] = {st.v0, st.v1, st.v2};
+            uint32_t sc[3] = {gen.canonical(gm.primId, st.v0),
+                              gen.canonical(gm.primId, st.v1),
+                              gen.canonical(gm.primId, st.v2)};
             int cornerOf[3] = {-1, -1, -1};
             for (int a = 0; a < 3; a++)
                 for (int b = 0; b < 3; b++)
