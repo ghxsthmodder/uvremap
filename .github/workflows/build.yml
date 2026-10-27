@@ -1,0 +1,112 @@
+name: build-and-release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runs-on: ubuntu-24.04
+          - name: linux-aarch64
+            runs-on: ubuntu-24.04-arm
+          - name: windows-x64
+            runs-on: windows-latest
+
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          cmake_ver=$(sed -n 's/^project(uvremap VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag_ver="${GITHUB_REF_NAME#v}"
+            if [[ "$tag_ver" != "$cmake_ver" ]]; then
+              echo "tag v$tag_ver does not match CMake project version $cmake_ver" >&2
+              exit 1
+            fi
+          fi
+          echo "version=$cmake_ver" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+
+      - name: Set up MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure
+        shell: bash
+        run: |
+          extra=""
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            extra="-DCMAKE_EXE_LINKER_FLAGS=-static-libstdc++,-static-libgcc"
+          fi
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release $extra -S .
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          PLATFORM: ${{ matrix.name }}
+        run: |
+          mkdir -p staging dist
+          cp build/bin/uvremap DEPENDENCIES.md README.md staging/
+          tar -czf "dist/uvremap-$VERSION-$PLATFORM.tar.gz" -C staging .
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          PLATFORM: ${{ matrix.name }}
+        run: |
+          New-Item -ItemType Directory -Force staging, dist | Out-Null
+          Copy-Item build/bin/uvremap.exe, DEPENDENCIES.md, README.md -Destination staging
+          Compress-Archive -Path staging/* -DestinationPath "dist/uvremap-$env:VERSION-$env:PLATFORM.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uvremap-${{ steps.ver.outputs.version }}-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "uvremap-*"
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/uvremap-*.tar.gz
+            artifacts/uvremap-*.zip
