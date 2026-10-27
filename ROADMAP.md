@@ -1,8 +1,8 @@
 # Roadmap — uvremap pós-v0.1.4
 
-Estado: Fases 1–4 do README implementadas e verificados (golden 237/237, releases
+Estado: Fases 1–4 do README implementadas e verificados (golden 259/259, releases
 v0.1.0–v0.1.3 com windows-x64 / linux-x86_64 / linux-aarch64). M0 concluído
-(v0.1.3); M1 parcial (1 e 3 lançados na v0.1.4). Prioridades abaixo
+(v0.1.3); M1 parcial (1 e 3 lançados na v0.1.4; 2 concluído, a lançar). Prioridades abaixo
 por impacto e risco.
 
 ## Política de versionamento
@@ -30,8 +30,8 @@ lançados na v0.1.3.
 ## M1 — Cobertura de extensões
 
 Status: itens 1 e 3 concluídos e lançados na v0.1.4 (rotação suportada no
-bake; draco/meshopt recusados com mensagem clara, exit 3). Restam 2 (variants)
-e 4 (`--bake-factors`).
+bake; draco/meshopt recusados com mensagem clara, exit 3). Item 2 concluído
+(ver abaixo), a lançar. Resta 4 (`--bake-factors`).
 
 1. **KHR_texture_transform com rotação** — substituir o motivo de rejeição por
    suporte real na amostragem (UV de origem rotacionado em torno de offset; o
@@ -42,6 +42,10 @@ e 4 (`--bake-factors`).
 2. **KHR_materials_variants** — hoje torna a primitiva inelegível (Shoe → exit 4).
    Plano: rebakear as texturas de cada variante para o mesmo atlas (slots por
    variante clonados junto do material), preservando o mapeamento de variante.
+   ✔ Concluído: mapeamentos carregados e reescritos no export; cada material
+   de variante recebe uma cópia dedicada do atlas (camadas por material no
+   bake); modo `material` agrupa por conjunto de candidatos. Shoe regenera
+   (exit 0); `check_variants.py` valida os 3 modos de atlas (golden 259/259).
 3. **Draco/meshopt** — detectar primitivas comprimidas; ou decodificar (via
    draco/meshopt quando disponíveis) ou rejeitar com aviso claro e exit 4
    honesto (hoje tinygltf sem extensões de decodificação provavelmente já
