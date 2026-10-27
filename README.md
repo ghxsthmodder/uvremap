@@ -137,7 +137,10 @@ autorização explícita.
                                       escolha seja explícita.
 
   `--resolution WIDTHxHEIGHT`         Resolução do espaço do atlas usado
-                                      na geração UV.
+                                      na geração UV. Se as ilhas não
+                                      couberem, o xatlas abre páginas
+                                      extras; as texturas finais empilham
+                                      as páginas verticalmente (W x H*N).
 
   `--padding PIXELS`                  Margem entre ilhas UV, expressa em
                                       pixels do atlas.

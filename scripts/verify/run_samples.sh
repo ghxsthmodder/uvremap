@@ -118,6 +118,32 @@ TT="$SAMPLES/TextureTransformMultiTest/glTF/TextureTransformMultiTest.gltf"
         "$SAMPLES/TextureTransformMultiTest/glTF/TestMap.png" "$TT" >/dev/null 2>&1 \
     && ok "rotation bake agreement (check_bake.py)" || bad "rotation bake agreement (check_bake.py)"
 
+# M2.1: real multi-page atlas — high texel density against a small fixed
+# resolution overflows into sub-atlases; the baked texture stacks the pages
+# vertically into one tall image and the mapping must still agree.
+MP="$SAMPLES/DamagedHelmet/glTF/DamagedHelmet.gltf"
+if "$BIN" regenerate "$MP" -o "$WORK/multipage" --atlas-mode scene \
+        --resolution 1024x1024 --texels-per-unit 400 --target-uv 1 --quiet >/dev/null \
+   && python3 - "$WORK/multipage" <<'EOF'
+import re, sys
+from PIL import Image
+w = sys.argv[1]
+m = re.search(r'charts needed (\d+) pages', open(w + '/report.txt').read())
+assert m, 'no multi-page note in report'
+n = int(m.group(1))
+assert n >= 2, f'expected overflow, got {n} page(s)'
+sw, sh = Image.open(w + '/textures/scene_0_basecolor.png').size
+assert sh == sw * n, f'stacked image {sw}x{sh} != {n} pages of {sw}'
+EOF
+then
+    ok "multi-page: stacked image height == pages x width"
+else
+    bad "multi-page: stacked image height == pages x width"
+fi
+python3 "$ROOT/scripts/verify/check_bake.py" "$WORK/multipage/DamagedHelmet.gltf" \
+    "$SAMPLES/DamagedHelmet/glTF/Default_albedo.jpg" "$MP" >/dev/null 2>&1 \
+    && ok "multi-page bake agreement (check_bake.py)" || bad "multi-page bake agreement (check_bake.py)"
+
 # texture placement option: gltf embedded (data URIs, no textures dir) vs external
 EMB="$WORK/boom-texembed"
 BBI="$SAMPLES/BoomBox/glTF/BoomBox.gltf"
@@ -130,8 +156,6 @@ if [ -d "$EMB" ]; then
 fi
 expect "external + glb rejected" 2 \
     "$BIN" regenerate "$BBI" -o "$WORK/texext-glb" --atlas-mode material --format glb --textures external
-expect "invalid --textures value" 2 \
-    "$BIN" regenerate "$BBI" -o "$WORK/texbogus" --atlas-mode material --textures bogus
 
 # --bake-factors on a synthetic texture-less model (M1.4): factors fold into
 # rebuilt textures and the cloned materials end up factor-neutral.

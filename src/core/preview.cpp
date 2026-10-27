@@ -97,9 +97,10 @@ bool renderUvLayout(const Model& model, int uvIndex, const std::string& outPath,
 bool renderAtlasLayout(const Model& model, const AtlasGen& gen, const std::string& outPath,
                        Report& report, std::string& err) {
     const int S = 1024;
+    const int pages = std::max(1, gen.pageCount);
     Canvas c(S, S);
     float sx = gen.width ? float(S) / gen.width : 1.f;
-    float sy = gen.height ? float(S) / gen.height : 1.f;
+    float sy = gen.height ? float(S) / float(gen.height * pages) : 1.f;
     size_t meshIdx = 0;
     for (const GenMesh& gm : gen.meshes) {
         uint8_t shade = uint8_t(40 + (meshIdx * 61) % 180);
@@ -108,7 +109,9 @@ bool renderAtlasLayout(const Model& model, const AtlasGen& gen, const std::strin
             const GenVertex& v1 = gm.vertices[gm.indices[f + 1]];
             const GenVertex& v2 = gm.vertices[gm.indices[f + 2]];
             if (v0.atlasIndex < 0 || v1.atlasIndex < 0 || v2.atlasIndex < 0) continue;
-            c.tri(v0.u * sx, v0.v * sy, v1.u * sx, v1.v * sy, v2.u * sx, v2.v * sy, shade);
+            const float poff = float(v0.atlasIndex) * gen.height;
+            c.tri(v0.u * sx, (poff + v0.v) * sy, v1.u * sx, (poff + v1.v) * sy, v2.u * sx,
+                  (poff + v2.v) * sy, shade);
         }
         meshIdx++;
     }

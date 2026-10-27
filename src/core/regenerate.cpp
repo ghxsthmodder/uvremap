@@ -169,7 +169,7 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
         }
         rep.stats.atlasCount++;
         rep.stats.atlasWidth = gens[gi].width;
-        rep.stats.atlasHeight = gens[gi].height;
+        rep.stats.atlasHeight = gens[gi].height * std::max(1, gens[gi].pageCount);
     }
     progress(3, "Generating UV atlas", true);
 
@@ -184,8 +184,11 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
     for (size_t gi = 0; gi < groups.size(); gi++) {
         AtlasOutput& ao = atlases[gi];
         ao.name = groups[gi].name;
-        ao.width = o.textureW > 0 ? o.textureW : gens[gi].width;
-        ao.height = o.textureH > 0 ? o.textureH : gens[gi].height;
+        const int pages = std::max(1, gens[gi].pageCount);
+        const int texW = o.textureW > 0 ? o.textureW : gens[gi].width;
+        const int texH = o.textureH > 0 ? o.textureH : gens[gi].height;
+        ao.width = texW;
+        ao.height = texH * pages;  // pages stack vertically into one texture
         ao.materialIds = groups[gi].materials;
 
         std::vector<BakedImage> baked;
@@ -211,9 +214,11 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
                 dst = src;  // carries position/normal/tangent/color/joints/uvsets
                 size_t need = size_t(o.targetUv) + 1;
                 if (dst.uvsets.size() < need) dst.uvsets.resize(need, V2{0, 0});
-                float u = gv.atlasIndex < 0 ? 0.f : gv.u / float(gens[gi].width);
-                float vv = gv.atlasIndex < 0 ? 0.f : gv.v / float(gens[gi].height);
-                dst.uvsets[size_t(o.targetUv)] = V2{u, vv};
+                dst.uvsets[size_t(o.targetUv)] =
+                    V2{gv.atlasIndex < 0 ? 0.f : gv.u / float(gens[gi].width),
+                       gv.atlasIndex < 0
+                           ? 0.f
+                           : (float(gv.atlasIndex) + gv.v / float(gens[gi].height)) / float(pages)};
             }
             rp.indices = gm.indices;
             ao.primitives.push_back(std::move(rp));

@@ -12,8 +12,8 @@
 namespace uvremap {
 
 struct GenVertex {
-    float u = 0, v = 0;  // atlas pixel coordinates
-    int32_t atlasIndex = -1;
+    float u = 0, v = 0;  // atlas pixel coordinates, within its page
+    int32_t atlasIndex = -1;  // page (0..pageCount-1), -1 = not in any atlas
     uint32_t xref = 0;   // index into the input primitive's vertex array
 };
 
@@ -48,7 +48,8 @@ struct TriKeyHash {
 };
 
 struct AtlasGen {
-    int width = 0, height = 0;
+    int width = 0, height = 0;  // per-page size
+    int pageCount = 1;          // xatlas sub-atlases; baked as stacked pages
     std::vector<GenMesh> meshes;  // 1:1 with group primitives, in order
     std::vector<int> primOrder;   // meshes[i].primId
     // (primId, sorted corner triple) -> source triangle corners.

@@ -1,8 +1,9 @@
 # Roadmap — uvremap pós-v0.1.4
 
-Estado: Fases 1–4 do README implementadas e verificados (golden 268/268, releases
+Estado: Fases 1–4 do README implementadas e verificados (golden 271/271, releases
 v0.1.0–v0.1.4 com windows-x64 / linux-x86_64 / linux-aarch64). M0 concluído
-(v0.1.3); M1 concluído (2 e 4 a lançar). Prioridades abaixo
+(v0.1.3); M1 concluído (2 e 4 a lançar); M2.1 concluído (multi-página por
+empilhamento + BIN chunk real no .glb, a lançar). Prioridades abaixo
 por impacto e risco.
 
 ## Política de versionamento
@@ -80,6 +81,14 @@ concluídos (ver abaixo), a lançar. M1 completo.
    N texturas por atlas e `atlasIndex` real no UV export; (b) manter single-page
    e falhar com exit 5 + sugestões concretas. Decidir (a) — é o que os usuários
    esperam de `--resolution` pequeno.
+   ✔ Concluído: empilhamento de páginas. O runner aceita `atlasCount > 1`
+   (fim do retry por densidade); o baker rasteriza por página e compos­ta as
+   camadas verticalmente numa textura W x (H*N); o UV de saída é
+   `v = (page + v_local/H)/N`, então `gltf_io` não muda. Camadas são alocadas
+   sob demanda (página vazia não emite nada) e o preview desenha o offset de
+   página. Golden: DamagedHelmet 1024x1024 com `--texels-per-unit 400` → 6 páginas,
+   94% de concordância via check_bake.py; validado também com doghouse.glb
+   privado (8 páginas, exit 0).
 2. **Resolução não quadrada** — xatlas só empacota quadrado; avaliar pós-processo
    de renormalização para WxH arbitrário (re-escalonar UVs do atlas) em vez do
    atual `max(W,H)` com aviso.

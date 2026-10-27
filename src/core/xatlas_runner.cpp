@@ -200,70 +200,55 @@ bool generateAtlas(const Model& model, const AtlasGroup& group, int sourceUv,
     }
     packOpts.bilinear = true;
 
-    // If charts overflow to a second atlas page, our single-page bake would drop
-    // them; retry with progressively lower density until everything fits page 0.
-    const int kMaxAttempts = 6;
-    for (int attempt = 0; attempt < kMaxAttempts; attempt++) {
-        xatlas::Atlas* atlas = xatlas::Create();
-        if (!atlas) {
-            err = "xatlas::Create failed";
-            return false;
-        }
-        for (const Holder& h : holders) {
-            xatlas::AddMeshError e = xatlas::AddMesh(atlas, makeDecl(h));
-            if (e != xatlas::AddMeshError::Success) {
-                xatlas::Destroy(atlas);
-                err = "xatlas::AddMesh failed for primitive " + std::to_string(h.primId) +
-                      " (code " + std::to_string(int(e)) + ")";
-                return false;
-            }
-        }
-        packOpts.texelsPerUnit = tpu;
-        xatlas::Generate(atlas, chartOpts, packOpts);
-
-        if (atlas->atlasCount > 1 && tpu > 0.f && res > 0 && attempt < kMaxAttempts - 1) {
-            xatlas::Destroy(atlas);
-            tpu *= 0.65f;
-            continue;
-        }
-
-        if (atlas->meshCount != group.primitives.size()) {
-            xatlas::Destroy(atlas);
-            err = "xatlas output mesh count mismatch";
-            return false;
-        }
-        out.width = int(atlas->width);
-        out.height = int(atlas->height);
-        out.meshes.resize(atlas->meshCount);
-        for (uint32_t m = 0; m < atlas->meshCount; m++) {
-            const xatlas::Mesh& om = atlas->meshes[m];
-            GenMesh& gm = out.meshes[m];
-            gm.primId = group.primitives[m];
-            out.primOrder.push_back(gm.primId);
-            gm.vertices.resize(om.vertexCount);
-            for (uint32_t v = 0; v < om.vertexCount; v++) {
-                gm.vertices[v].u = om.vertexArray[v].uv[0];
-                gm.vertices[v].v = om.vertexArray[v].uv[1];
-                gm.vertices[v].atlasIndex =
-                    om.vertexArray[v].atlasIndex == 0 ? 0 : -1;  // single page only
-                gm.vertices[v].xref = om.vertexArray[v].xref;
-            }
-            gm.indices.assign(om.indexArray, om.indexArray + om.indexCount);
-        }
-        if (atlas->atlasCount > 1)
-            report.warn("charts still did not fit in one atlas page (" +
-                        std::to_string(atlas->atlasCount) +
-                        " pages after reducing texel density); regions beyond page 0 are "
-                        "left unmapped — increase --resolution");
-        else if (opt.texelsPerUnit > 0.f && tpu < opt.texelsPerUnit)
-            report.warn("reduced texel density from " + std::to_string(opt.texelsPerUnit) +
-                        " to " + std::to_string(tpu) +
-                        " to fit all charts into a single atlas page");
-        xatlas::Destroy(atlas);
-        return true;
+    // Charts that do not fit one page spill into extra sub-atlases; the baker
+    // stacks every page into one tall texture, so nothing is lost.
+    xatlas::Atlas* atlas = xatlas::Create();
+    if (!atlas) {
+        err = "xatlas::Create failed";
+        return false;
     }
-    err = "internal: atlas attempt loop exited";  // unreachable
-    return false;
+    for (const Holder& h : holders) {
+        xatlas::AddMeshError e = xatlas::AddMesh(atlas, makeDecl(h));
+        if (e != xatlas::AddMeshError::Success) {
+            xatlas::Destroy(atlas);
+            err = "xatlas::AddMesh failed for primitive " + std::to_string(h.primId) +
+                  " (code " + std::to_string(int(e)) + ")";
+            return false;
+        }
+    }
+    packOpts.texelsPerUnit = tpu;
+    xatlas::Generate(atlas, chartOpts, packOpts);
+
+    if (atlas->meshCount != group.primitives.size()) {
+        xatlas::Destroy(atlas);
+        err = "xatlas output mesh count mismatch";
+        return false;
+    }
+    out.width = int(atlas->width);
+    out.height = int(atlas->height);
+    out.pageCount = std::max(1, int(atlas->atlasCount));
+    out.meshes.resize(atlas->meshCount);
+    for (uint32_t m = 0; m < atlas->meshCount; m++) {
+        const xatlas::Mesh& om = atlas->meshes[m];
+        GenMesh& gm = out.meshes[m];
+        gm.primId = group.primitives[m];
+        out.primOrder.push_back(gm.primId);
+        gm.vertices.resize(om.vertexCount);
+        for (uint32_t v = 0; v < om.vertexCount; v++) {
+            gm.vertices[v].u = om.vertexArray[v].uv[0];
+            gm.vertices[v].v = om.vertexArray[v].uv[1];
+            gm.vertices[v].atlasIndex = om.vertexArray[v].atlasIndex;
+            gm.vertices[v].xref = om.vertexArray[v].xref;
+        }
+        gm.indices.assign(om.indexArray, om.indexArray + om.indexCount);
+    }
+    if (out.pageCount > 1)
+        report.info("atlas '" + group.name + "': charts needed " +
+                    std::to_string(out.pageCount) +
+                    " pages; baked textures stack them vertically (" + std::to_string(out.width) +
+                    "x" + std::to_string(out.height * out.pageCount) + ")");
+    xatlas::Destroy(atlas);
+    return true;
 }
 
 }  // namespace uvremap

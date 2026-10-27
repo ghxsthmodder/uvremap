@@ -188,24 +188,21 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
     }
 
     // Rasters: one shared set (material -1) plus per-material sets when any
-    // primitive carries multiple candidate materials (variants).
-    std::vector<Raster> sharedLayers(kTexCount);
-    bool sharedFactor[kTexCount];
-    std::memset(sharedFactor, 0, sizeof(sharedFactor));
-    for (const auto& fb : perMatFactorBits)
-        for (int t = 0; t < kTexCount; t++)
-            if (fb.second & factorBit(TexType(t))) sharedFactor[t] = true;
-    for (int t = 0; t < kTexCount; t++) {
-        if (!typeNeeded[t] && !sharedFactor[t]) continue;
-        sharedLayers[t].resize(texW, texH);
+    // primitive carries multiple candidate materials (variants). Every set has
+    // one layer per atlas page, allocated lazily on first touch and stacked
+    // vertically into one image per (material, type) at emission.
+    const int pages = std::max(1, gen.pageCount);
+    std::vector<std::vector<Raster>> sharedLayers(pages, std::vector<Raster>(kTexCount));
+    auto ensureLayer = [&](Raster& r, TexType t) {
+        if (!r.rgba.empty()) return;
+        r.resize(texW, texH);
         uint8_t n[4];
-        neutralTexel(TexType(t), n);
-        sharedLayers[t].fill(n[0], n[1], n[2], n[3]);
-    }
+        neutralTexel(t, n);
+        r.fill(n[0], n[1], n[2], n[3]);
+    };
     // Dedicated per-material layers are used when variant candidates need them,
     // or when a factor-baked material shares the atlas with other materials
-    // (its flat color must not bleed into theirs). If no material ends up
-    // needing a dedicated layer, factor prims fall back to shared stamping.
+    // (its flat color must not bleed into theirs).
     bool perMatUsed = false;
     if (anyMulti) {
         perMatUsed = true;
@@ -224,25 +221,14 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
     // contributes content to them.
     if (!perMatUsed && perMatFactorBits.size() > 1) perMatUsed = true;
     if (!perMatUsed && !perMatFactorBits.empty() && matIds.size() > 1) perMatUsed = true;
-    std::map<int, std::vector<Raster>> perMatLayers;
-    std::map<int, std::vector<uint8_t>> fillMasks;  // material (or -1) -> texel mask
-    if (perMatUsed) {
-        for (int mat : matIds) {
-            std::vector<Raster>& ls = perMatLayers[mat];
-            ls.resize(kTexCount);
-            for (int t = 0; t < kTexCount; t++) {
-                if (!perMatNeed[mat][t]) continue;
-                ls[t].resize(texW, texH);
-                uint8_t n[4];
-                neutralTexel(TexType(t), n);
-                ls[t].fill(n[0], n[1], n[2], n[3]);
-            }
-            if (perMatFactorBits[mat]) fillMasks[mat].assign(size_t(texW) * texH, 0);
-        }
-    } else {
-        for (const auto& fb : perMatFactorBits)
-            if (fb.second) fillMasks[-1].assign(size_t(texW) * texH, 0);
-    }
+    std::map<int, std::vector<std::vector<Raster>>> perMatLayers;  // mat -> page -> layers
+    auto matPage = [&](int mat) -> std::vector<std::vector<Raster>>& {
+        std::vector<std::vector<Raster>>& pl = perMatLayers[mat];
+        if (pl.empty()) pl.assign(pages, std::vector<Raster>(kTexCount));
+        return pl;
+    };
+    // Texel-coverage masks for factor painting, keyed (material|-1, page).
+    std::map<std::pair<int, int>, std::vector<uint8_t>> fillMasks;
 
     int trianglesUnmapped = 0;
     int trianglesDegenerate = 0;  // zero-area faces xatlas legitimately ignores
@@ -302,6 +288,9 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
             TriFrame dstFrame;
             bool haveDstFrame = triangleFrame(dpos, duv, dstFrame);
 
+            // All three corners share one chart, hence one page.
+            const int page = g0.atlasIndex;
+
             // Stamp this triangle once per candidate material of the primitive.
             static const std::vector<int> kNoMats;
             auto csIt = cand.find(gm.primId);
@@ -328,9 +317,11 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                 for (int t = 0; t < kTexCount; t++) {
                     target[t] = nullptr;
                     if (!perMatNeed[mat][t]) continue;
+                    Raster& layer = perMatUsed ? matPage(mat)[page][t] : sharedLayers[page][t];
                     if (perMatFactorBits[mat] & factorBit(TexType(t))) {
                         // Flat factor: covered texels are painted in a final pass.
-                        target[t] = perMatUsed ? &perMatLayers[mat][t] : &sharedLayers[t];
+                        ensureLayer(layer, TexType(t));
+                        target[t] = &layer;
                         anyActive = true;
                         continue;
                     }
@@ -356,10 +347,20 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                     }
                     // Shared layer when every prim has one material; per-material
                     // layer when variants make several materials share regions.
-                    target[t] = perMatUsed ? &perMatLayers[mat][t] : &sharedLayers[t];
+                    ensureLayer(layer, TexType(t));
+                    target[t] = &layer;
                     anyActive = true;
                 }
                 if (!anyActive) continue;
+
+                // Track coverage for factor painting on this page.
+                if (perMatFactorBits[mat]) {
+                    std::vector<uint8_t>& mask = fillMasks[{perMatUsed ? mat : -1, page}];
+                    if (mask.empty()) mask.assign(size_t(texW) * texH, 0);
+                    for (int y = minY; y <= maxY; y++)
+                        std::fill(mask.begin() + size_t(y) * texW + minX,
+                                  mask.begin() + size_t(y) * texW + maxX + 1, uint8_t(1));
+                }
 
                 for (int y = minY; y <= maxY; y++) {
                     uint8_t* rowBase[kTexCount];
@@ -404,43 +405,19 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
         }
     }
 
-    // Paint the flat factors into the texels of the prims that use each factor
-    // material. Triangle bounding boxes cover the full triangle plus padding.
+    // Paint the flat factors into the covered texels of every page they were
+    // stamped on.
     for (auto& mk : fillMasks) {
-        int matKey = mk.first;
+        int matKey = mk.first.first;
+        int page = mk.first.second;
         std::vector<uint8_t>& mask = mk.second;
-        for (const GenMesh& gm : gen.meshes) {
-            const std::vector<int>* cs = nullptr;
-            auto cit = cand.find(gm.primId);
-            if (cit != cand.end()) cs = &cit->second;
-            if (!cs) continue;
-            bool uses = false;
-            if (matKey >= 0)
-                uses = std::find(cs->begin(), cs->end(), matKey) != cs->end();
-            else
-                uses = cs->size() == 1;  // shared mask: single-material prims
-            if (!uses) continue;
-            for (size_t f = 0; f + 2 < gm.indices.size(); f += 3) {
-                const GenVertex& a = gm.vertices[gm.indices[f]];
-                const GenVertex& b = gm.vertices[gm.indices[f + 1]];
-                const GenVertex& c = gm.vertices[gm.indices[f + 2]];
-                if (a.atlasIndex < 0 || b.atlasIndex < 0 || c.atlasIndex < 0) continue;
-                int bx0 = std::max(int(std::floor(std::min({a.u, b.u, c.u}) * scaleX)), 0);
-                int bx1 = std::min(int(std::ceil(std::max({a.u, b.u, c.u}) * scaleX)), texW - 1);
-                int by0 = std::max(int(std::floor(std::min({a.v, b.v, c.v}) * scaleY)), 0);
-                int by1 = std::min(int(std::ceil(std::max({a.v, b.v, c.v}) * scaleY)), texH - 1);
-                for (int y = by0; y <= by1; y++)
-                    std::fill(mask.begin() + size_t(y) * texW + bx0,
-                              mask.begin() + size_t(y) * texW + bx1 + 1, uint8_t(1));
-            }
-        }
+        int matForBits = matKey >= 0 ? matKey : perMatFactorBits.begin()->first;
         for (int t = 0; t < kTexCount; t++) {
-            int matForBits = matKey >= 0 ? matKey : perMatFactorBits.begin()->first;
             if (!(perMatFactorBits[matForBits] & factorBit(TexType(t)))) continue;
             uint8_t fc[4];
             if (!factorTexel(model.materials[matForBits], TexType(t), fc)) continue;
-            Raster& ls = matKey >= 0 ? perMatLayers[matKey][t] : sharedLayers[t];
-            if (ls.rgba.empty()) continue;
+            Raster& ls = matKey >= 0 ? matPage(matKey)[page][t] : sharedLayers[page][t];
+            ensureLayer(ls, TexType(t));
             for (size_t i = 0; i < mask.size(); i++) {
                 if (!mask[i]) continue;
                 uint8_t* d = ls.rgba.data() + i * 4;
@@ -464,35 +441,54 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                     " duplicated source triangle(s) (same corners, different UVs possible); "
                     "first occurrence used");
 
+    // Emit one image per (material, type): all pages stacked vertically,
+    // untouched pages left neutral-filled.
+    auto emit = [&](int mat, TexType t, const std::vector<Raster*>& pageLayers, int bits) {
+        bool any = false;
+        for (Raster* r : pageLayers)
+            if (r && !r->rgba.empty()) any = true;
+        if (!any) return;
+        Image out;
+        out.w = texW;
+        out.h = texH * pages;
+        out.name = group.name + "_" + texTypeName(t);
+        if (mat >= 0) out.name += "_mat" + std::to_string(mat);
+        uint8_t n[4];
+        neutralTexel(t, n);
+        out.rgba.assign(size_t(out.w) * out.h * 4, 0);
+        for (size_t i = 0; i < out.rgba.size(); i += 4) {
+            out.rgba[i] = n[0];
+            out.rgba[i + 1] = n[1];
+            out.rgba[i + 2] = n[2];
+            out.rgba[i + 3] = n[3];
+        }
+        for (int p = 0; p < pages; p++) {
+            const Raster* r = pageLayers[p];
+            if (!r || r->rgba.empty()) continue;
+            std::memcpy(out.rgba.data() + size_t(p) * texW * texH * 4, r->rgba.data(),
+                        size_t(texW) * texH * 4);
+        }
+        outBaked.push_back(BakedImage{mat, t, std::move(out), bits});
+    };
+
     if (perMatUsed) {
         for (int mat : matIds) {
-            std::vector<Raster>& ls = perMatLayers[mat];
+            auto plIt = perMatLayers.find(mat);
+            if (plIt == perMatLayers.end()) continue;
             for (int t = 0; t < kTexCount; t++) {
-                if (ls[t].rgba.empty()) continue;
-                Image out;
-                out.name = group.name + "_" + texTypeName(TexType(t)) + "_mat" +
-                           std::to_string(mat);
-                imageFromRaster(ls[t], out);
-                outBaked.push_back(
-                    BakedImage{mat, TexType(t), std::move(out), perMatFactorBits[mat]});
+                std::vector<Raster*> ls{size_t(pages)};
+                for (int p = 0; p < pages; p++) ls[p] = &plIt->second[p][t];
+                emit(mat, TexType(t), ls, perMatFactorBits[mat]);
             }
         }
     }
     for (int t = 0; t < kTexCount; t++) {
-        if (sharedLayers[t].rgba.empty()) continue;
-        bool neededShared = typeNeeded[t] || sharedFactor[t];
-        if (!neededShared) continue;
-        if (perMatUsed &&
-            std::any_of(outBaked.begin(), outBaked.end(),
-                        [&](const BakedImage& b) { return b.type == TexType(t); }))
-            continue;  // dedicated copies cover every region using this type
+        std::vector<Raster*> ls{size_t(pages)};
+        for (int p = 0; p < pages; p++) ls[p] = &sharedLayers[p][t];
         int bits = 0;
         for (const auto& fb : perMatFactorBits)
             if (fb.second & factorBit(TexType(t))) bits |= factorBit(TexType(t));
-        Image out;
-        out.name = group.name + "_" + texTypeName(TexType(t));
-        imageFromRaster(sharedLayers[t], out);
-        outBaked.push_back(BakedImage{-1, TexType(t), std::move(out), bits});
+        emit(-1, TexType(t), ls, bits);
     }
     return true;
 }

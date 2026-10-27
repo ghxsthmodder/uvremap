@@ -444,6 +444,85 @@ static void testBakeFactors() {
     CHECK(mrCopies == 1);
 }
 
+static void testMultiPageAtlas() {
+    // Four 1x1 quads packed at high texel density against a tiny fixed
+    // resolution force several xatlas sub-atlases; the baker stacks them
+    // vertically into one tall image and every vertex names a real page.
+    Model model = makeQuadModel();
+    for (int k = 1; k < 4; k++) {
+        Primitive p = model.primitives[0];
+        p.meshIndex = k;
+        p.primIndex = 0;
+        for (auto& v : p.vertices) v.position.x += 2.f * k;
+        model.primitives.push_back(std::move(p));
+    }
+    Image img;
+    img.name = "flat";
+    img.w = 4;
+    img.h = 4;
+    img.decoded = true;
+    img.rgba.assign(4 * 4 * 4, 0);
+    for (size_t i = 0; i < 16; i++) {
+        img.rgba[i * 4 + 1] = 220;
+        img.rgba[i * 4 + 3] = 255;
+    }
+    Material m;
+    m.name = "m0";
+    m.tex[int(TexType::BaseColor)].present = true;
+    m.tex[int(TexType::BaseColor)].imageIndex = 0;
+    m.tex[int(TexType::BaseColor)].texCoord = 0;
+    model.images.push_back(std::move(img));
+    model.materials.push_back(m);
+
+    AtlasGroup group;
+    group.id = 0;
+    group.name = "t";
+    group.primitives = {0, 1, 2, 3};
+    group.materials = {0};
+    GenOptions go;
+    go.resolutionW = go.resolutionH = 16;
+    go.padding = 1;
+    go.texelsPerUnit = 12.f;
+
+    Report rep;
+    std::string err;
+    AtlasGen gen;
+    CHECK(generateAtlas(model, group, 0, go, gen, rep, err));
+    CHECK(gen.pageCount >= 2);
+    for (const GenMesh& gm : gen.meshes)
+        for (const GenVertex& gv : gm.vertices) {
+            CHECK(gv.atlasIndex >= -1 && gv.atlasIndex < gen.pageCount);
+            if (gv.atlasIndex < 0) continue;
+            CHECK(gv.u >= 0.f && gv.u <= float(gen.width));
+            CHECK(gv.v >= 0.f && gv.v <= float(gen.height));
+        }
+
+    BakeOptions bo;
+    bo.filter = Filter::Nearest;
+    std::vector<BakedImage> baked;
+    CHECK(bakeGroup(model, group, gen, bo, baked, rep, err));
+    int bc = 0;
+    for (const BakedImage& b : baked)
+        if (b.type == TexType::BaseColor) bc++;
+    CHECK(bc == 1);
+    for (const BakedImage& b : baked) {
+        if (b.type != TexType::BaseColor) continue;
+        CHECK(b.image.w == gen.width);
+        CHECK(b.image.h == gen.height * gen.pageCount);
+        int greenPages = 0;
+        for (int p = 0; p < gen.pageCount; p++) {
+            bool green = false;
+            for (int y = p * gen.height; y < (p + 1) * gen.height && !green; y++)
+                for (int x = 0; x < gen.width && !green; x++) {
+                    const uint8_t* px = &b.image.rgba[(size_t(y) * gen.width + x) * 4];
+                    if (px[1] > 180 && px[0] < 60) green = true;
+                }
+            if (green) greenPages++;
+        }
+        CHECK(greenPages >= 2);
+    }
+}
+
 int main() {
     testNormalIdentity();
     testNormalFlatRotation();
@@ -455,6 +534,7 @@ int main() {
     testTextureTransformRotation();
     testMaterialsVariantsBake();
     testBakeFactors();
+    testMultiPageAtlas();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;
