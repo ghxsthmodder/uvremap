@@ -1,9 +1,9 @@
 # Roadmap — uvremap pós-v0.1.4
 
-Estado: Fases 1–4 do README implementadas e verificados (golden 277/277, releases
+Estado: Fases 1–4 do README implementadas e verificados (golden 281/281, releases
 v0.1.0–v0.1.5 com windows-x64 / linux-x86_64 / linux-aarch64 / android-arm64).
 M0 concluído (v0.1.3); M1 concluído (v0.1.5); M2 concluído (multi-página e
-não-quadrado; v0.1.5 + pending); M3 em curso (itens 1 e 2 concluídos). Prioridades abaixo
+não-quadrado; v0.1.5 + pending); M3 em curso (itens 1–3 concluídos). Prioridades abaixo
 por impacto e risco.
 
 ## Política de versionamento
@@ -119,6 +119,12 @@ concluídos (ver abaixo), a lançar. M1 completo.
    e para o JSON futuro.
 3. **preview melhorado** — lado a lado UV antigo/novo + heatmap de ocupação e
    mapa de densidade de texels.
+   ✔ Concluído: `--preview` escreve, por atlas, o layout das ilhas (já
+   existia, mas sem flag — agora ligada ao CLI), o comparador lado a lado
+   (wireframe das UVs de origem vs. preenchimento do novo atlas) e o par de
+   heatmaps (ocupação branco-preto + densidade de texels em escala log,
+   azul→vermelho). Páginas empilhadas verticalmente; golden confere as
+   dimensões dos PNGs.
 4. **JSON do relatório** (`--json`) para integração em pipelines.
 
 ## Infra recorrente (a cada release)

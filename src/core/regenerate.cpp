@@ -295,6 +295,12 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
             renderAtlasLayout(model, gens[gi],
                               (staging / (groups[gi].name + "_atlas_preview.png")).string(),
                               rep, err);
+            renderUvCompare(model, o.sourceUv, gens[gi],
+                            (staging / (groups[gi].name + "_uv_compare.png")).string(), rep,
+                            err);
+            renderAtlasHeatmaps(model, gens[gi],
+                                (staging / (groups[gi].name + "_heatmaps.png")).string(), rep,
+                                err);
         }
     }
 

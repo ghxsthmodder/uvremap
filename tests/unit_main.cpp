@@ -1,12 +1,14 @@
 // Minimal self-contained unit checks for uvremap core.
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <vector>
 
 #include "core/gltf_io.h"
 #include "core/grouping.h"
 #include "core/image.h"
 #include "core/normal_math.h"
+#include "core/preview.h"
 #include "core/texture_baker.h"
 #include "core/xatlas_runner.h"
 
@@ -618,6 +620,37 @@ static void testSelfCheck() {
         CHECK(w.find("low agreement") == std::string::npos);
 }
 
+static void testPreviewRenderers() {
+    Model model = makeQuadModel();
+    AtlasGroup group;
+    group.id = 0;
+    group.name = "t";
+    group.primitives = {0};
+    GenOptions go;
+    go.resolutionW = go.resolutionH = 64;
+    go.padding = 1;
+    Report rep;
+    std::string err;
+    AtlasGen gen;
+    CHECK(generateAtlas(model, group, 0, go, gen, rep, err));
+    const char* paths[2] = {"unit_uv_compare.png", "unit_heatmaps.png"};
+    CHECK(renderUvCompare(model, 0, gen, paths[0], rep, err));
+    CHECK(renderAtlasHeatmaps(model, gen, paths[1], rep, err));
+    bool sawHeatInfo = false;
+    for (const auto& i : rep.infos())
+        if (i.find("preview heatmaps: density range") == 0) sawHeatInfo = true;
+    CHECK(sawHeatInfo);
+    for (const char* p : paths) {
+        std::ifstream f(p, std::ios::binary);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),
+                                   std::istreambuf_iterator<char>());
+        Raster r;
+        CHECK(decodeImage(bytes, r, err));
+        CHECK(r.w == 2064 && r.h == 1024);  // 2 x 1024 panels + 16 px divider
+        std::remove(p);
+    }
+}
+
 int main() {
     testNormalIdentity();
     testNormalFlatRotation();
@@ -632,6 +665,7 @@ int main() {
     testMultiPageAtlas();
     testNonSquareAtlas();
     testSelfCheck();
+    testPreviewRenderers();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

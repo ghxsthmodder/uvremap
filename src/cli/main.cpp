@@ -34,6 +34,7 @@ struct Args {
     int sourceUv = 0, targetUv = 0;
     int selfCheck = 0;
     bool dryRun = false, force = false, verbose = false, quiet = false;
+    bool preview = false;
     bool bakeFactors = false;
     bool hasUvSet = false;
     std::string error;
@@ -94,6 +95,9 @@ regenerate/preview options:
       --textures MODE          external | embedded (gltf only; default external,
                                glb always embeds)
       --dry-run                validate and print the plan without writing
+      --preview                write diagnostic PNGs next to the output: atlas
+                               layout, source-vs-atlas comparison, occupancy and
+                               texel-density heatmaps
       --force                  allow overwriting existing output files
       --verbose                extra detail
       --quiet                  minimal output
@@ -181,6 +185,8 @@ int parseArgs(int argc, char** argv, Args& a) {
             a.textures = v;
         } else if (s == "--dry-run") {
             a.dryRun = true;
+        } else if (s == "--preview") {
+            a.preview = true;
         } else if (s == "--force") {
             a.force = true;
         } else if (s == "--verbose") {
@@ -426,6 +432,7 @@ int cmdRegenerate(const Args& a) {
     }
     if (a.textures == "embedded") o.embedTextures = true;
     o.dryRun = a.dryRun;
+    o.writePreviews = a.preview;
     o.force = a.force;
     o.verbose = a.verbose;
     o.quiet = a.quiet;

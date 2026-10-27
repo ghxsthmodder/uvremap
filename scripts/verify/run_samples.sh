@@ -175,6 +175,29 @@ grep -q "self-check.*normal: skipped" "$WORK/selfcheck/report.txt" 2>/dev/null \
     && ok "self-check: normal map marked skipped" || bad "self-check: normal map marked skipped"
 expect "self-check bad value" 2 "$BIN" regenerate "$MP" -o "$WORK/selfcheck2" --self-check 0
 
+# M3.3: --preview emits diagnostic PNGs (atlas layout, UV compare, heatmaps)
+png_dims() { # <file> <w> <h>
+    python3 - "$1" "$2" "$3" <<'PY'
+import struct, sys
+d = open(sys.argv[1], 'rb').read(24)
+assert d[:8] == b'\x89PNG\r\n\x1a\n', 'not a png'
+w, h = struct.unpack('>II', d[16:24])
+assert (w, h) == (int(sys.argv[2]), int(sys.argv[3])), '%dx%d' % (w, h)
+PY
+}
+expect "preview exit 0" 0 \
+    "$BIN" regenerate "$MP" -o "$WORK/preview" --atlas-mode scene --preview --quiet
+if [ -d "$WORK/preview" ]; then
+    png_dims "$WORK/preview/scene_0_atlas_preview.png" 1024 1024 \
+        && ok "preview: atlas layout png" || bad "preview: atlas layout png"
+    png_dims "$WORK/preview/scene_0_uv_compare.png" 2064 1024 \
+        && ok "preview: uv compare png" || bad "preview: uv compare png"
+    png_dims "$WORK/preview/scene_0_heatmaps.png" 2064 1024 \
+        && ok "preview: heatmaps png" || bad "preview: heatmaps png"
+else
+    bad "preview: output dir missing"
+fi
+
 # texture placement option: gltf embedded (data URIs, no textures dir) vs external
 EMB="$WORK/boom-texembed"
 BBI="$SAMPLES/BoomBox/glTF/BoomBox.gltf"

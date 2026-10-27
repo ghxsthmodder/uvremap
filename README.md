@@ -207,6 +207,16 @@ autorização explícita.
                                       plano sem gravar os arquivos
                                       finais.
 
+  `--preview`                         Escreve PNGs de diagnóstico no
+                                      diretório de saída, por atlas:
+                                      `<name>_atlas_preview.png` (layout
+                                      das ilhas), `<name>_uv_compare.png`
+                                      (wireframe das UVs de origem ao lado
+                                      do novo atlas) e
+                                      `<name>_heatmaps.png` (ocupação
+                                      branco-preto e mapa de calor de
+                                      densidade de texels, escala log).
+
   `--force`                           Autoriza a sobrescrita de arquivos
                                       existentes no destino.
 
