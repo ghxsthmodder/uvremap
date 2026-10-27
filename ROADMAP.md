@@ -1,9 +1,9 @@
 # Roadmap — uvremap pós-v0.1.4
 
-Estado: Fases 1–4 do README implementadas e verificados (golden 273/273, releases
+Estado: Fases 1–4 do README implementadas e verificados (golden 277/277, releases
 v0.1.0–v0.1.5 com windows-x64 / linux-x86_64 / linux-aarch64 / android-arm64).
 M0 concluído (v0.1.3); M1 concluído (v0.1.5); M2 concluído (multi-página e
-não-quadrado; v0.1.5 + pending). Prioridades abaixo
+não-quadrado; v0.1.5 + pending); M3 em curso (itens 1 e 2 concluídos). Prioridades abaixo
 por impacto e risco.
 
 ## Política de versionamento
@@ -105,9 +105,18 @@ concluídos (ver abaixo), a lançar. M1 completo.
 1. **Paralelismo por atlas** — generation/baking/export por grupo em threads
    (bake atual é single-thread por texel; BoomBox/doghouse pequenos, mas 4K+
    com variantes multiplica).
+   ✔ Concluído: baking por grupo em pool de threads (a generation xatlas já é
+   internamente threadada; export é leve). Relatórios e stats mesclados em ordem
+   de grupo — saída byte-idêntica ao caminho sequencial (determinismo verificado
+   por hash das texturas em execuções repetidas, modelo de 28 atlas).
 2. **Self-check de bake embutido** — o `check_bake.py` virou referência; portar
    a amostragem estatística para o CLI (`--self-check N`): amostra N pontos por
    atlas, reporta % de concordância no `report.txt`.
+   ✔ Concluído: `--self-check N` amostra N texels por imagem reconstruída e
+   confere contra a textura de origem (tolerância 40 por canal, como o
+   `check_bake.py`; mapas de normal pulados com nota no relatório; concordância
+   < 85% gera aviso). Seeds determinísticos; percentuais vão para o `report.txt`
+   e para o JSON futuro.
 3. **preview melhorado** — lado a lado UV antigo/novo + heatmap de ocupação e
    mapa de densidade de texels.
 4. **JSON do relatório** (`--json`) para integração em pipelines.

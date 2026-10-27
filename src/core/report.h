@@ -42,6 +42,7 @@ class Report {
 
     const std::vector<std::string>& warnings() const { return warnings_; }
     const std::vector<std::string>& errors() const { return errors_; }
+    const std::vector<std::string>& infos() const { return infos_; }
     int warningCount() const { return int(warnings_.size()); }
 
     Stats stats;

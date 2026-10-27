@@ -5,7 +5,10 @@
 #include <cmath>
 #include <cfloat>
 #include <cstring>
+#include <iomanip>
 #include <map>
+#include <random>
+#include <sstream>
 
 #include "core/normal_math.h"
 
@@ -489,6 +492,184 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
         for (const auto& fb : perMatFactorBits)
             if (fb.second & factorBit(TexType(t))) bits |= factorBit(TexType(t));
         emit(-1, TexType(t), ls, bits);
+    }
+    return true;
+}
+
+bool selfCheckGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
+                    const BakeOptions& opt, const std::vector<BakedImage>& baked, int nSamples,
+                    Report& report) {
+    if (nSamples <= 0) return true;
+    const int texW = opt.textureW > 0 ? opt.textureW : gen.width;
+    const int texH = opt.textureH > 0 ? opt.textureH : gen.height;
+    if (texW <= 0 || texH <= 0) return true;
+    const float scaleX = float(texW) / float(gen.width);
+    const float scaleY = float(texH) / float(gen.height);
+
+    // Candidate materials per primitive (mirror of bakeGroup).
+    std::map<int, std::vector<int>> cand;
+    for (int pid : group.primitives) {
+        const Primitive& p = model.primitives[pid];
+        std::vector<int>& cs = cand[pid];
+        auto add = [&](int m) {
+            if (m < 0 || m >= int(model.materials.size())) return;
+            if (std::find(cs.begin(), cs.end(), m) == cs.end()) cs.push_back(m);
+        };
+        add(p.material);
+        for (const VariantMapping& vm : p.variantMappings) add(vm.material);
+    }
+
+    // Triangles that map to a source triangle with all corners matched.
+    struct Tri {
+        int gmIdx;
+        size_t f;
+        SourceTri st;
+        int cornerOf[3];
+    };
+    std::vector<Tri> tris;
+    for (size_t mi = 0; mi < gen.meshes.size(); mi++) {
+        const GenMesh& gm = gen.meshes[mi];
+        for (size_t f = 0; f + 2 < gm.indices.size(); f += 3) {
+            uint32_t i0 = gm.indices[f], i1 = gm.indices[f + 1], i2 = gm.indices[f + 2];
+            const GenVertex& g0 = gm.vertices[i0];
+            const GenVertex& g1 = gm.vertices[i1];
+            const GenVertex& g2 = gm.vertices[i2];
+            if (g0.atlasIndex < 0 || g1.atlasIndex < 0 || g2.atlasIndex < 0) continue;
+            Tri t;
+            t.gmIdx = int(mi);
+            t.f = f;
+            if (!gen.findSource(gm.primId, gm, i0, i1, i2, t.st)) continue;
+            uint32_t xref[3] = {gen.canonical(gm.primId, g0.xref),
+                                gen.canonical(gm.primId, g1.xref),
+                                gen.canonical(gm.primId, g2.xref)};
+            uint32_t sc[3] = {gen.canonical(gm.primId, t.st.v0),
+                              gen.canonical(gm.primId, t.st.v1),
+                              gen.canonical(gm.primId, t.st.v2)};
+            t.cornerOf[0] = t.cornerOf[1] = t.cornerOf[2] = -1;
+            for (int a = 0; a < 3; a++)
+                for (int b = 0; b < 3; b++)
+                    if (xref[a] == sc[b]) t.cornerOf[a] = b;
+            if (t.cornerOf[0] < 0 || t.cornerOf[1] < 0 || t.cornerOf[2] < 0) continue;
+            tris.push_back(t);
+        }
+    }
+
+    for (const BakedImage& b : baked) {
+        const int t = int(b.type);
+        if (b.type == TexType::Normal) {
+            report.info("self-check '" + group.name + "' normal: skipped (tangent-frame rebake "
+                        "not verifiable by texel compare)");
+            continue;
+        }
+        if (b.image.w != texW || b.image.h < texH) continue;
+        if (tris.empty()) {
+            report.info("self-check '" + group.name + "' " + texTypeName(b.type) +
+                        ": no mappable triangles");
+            continue;
+        }
+        std::mt19937 rng(7u + size_t(b.material) * 131u + size_t(t) * 17u);
+        std::uniform_int_distribution<size_t> pick(0, tris.size() - 1);
+        std::uniform_real_distribution<float> urand(0.f, 1.f);
+        int ok = 0, n = 0;
+        for (int s = 0; s < nSamples; s++) {
+            const Tri& tri = tris[pick(rng)];
+            const GenMesh& gm = gen.meshes[tri.gmIdx];
+            const Primitive& prim = model.primitives[gm.primId];
+            const GenVertex* gv[3] = {&gm.vertices[gm.indices[tri.f]],
+                                      &gm.vertices[gm.indices[tri.f + 1]],
+                                      &gm.vertices[gm.indices[tri.f + 2]]};
+            // Which material's textures were sampled into this region?
+            const std::vector<int>& cs = cand[gm.primId];
+            int mat = b.material;
+            if (mat < 0) {
+                if (cs.empty()) continue;
+                mat = prim.material >= 0 && std::find(cs.begin(), cs.end(), prim.material) !=
+                                                        cs.end()
+                          ? prim.material
+                          : cs[0];
+            } else if (std::find(cs.begin(), cs.end(), mat) == cs.end()) {
+                continue;  // prim not stamped into this material's copy
+            }
+            const Material& m = model.materials[mat];
+            const TextureRef& ref = m.tex[t];
+
+            float r1 = urand(rng), r2 = urand(rng);
+            if (r2 < r1) std::swap(r1, r2);
+            const float w[3] = {1.f - r2, r2 - r1, r1};
+
+            // Baked atlas texel (pages stack vertically).
+            float au = 0.f, av = 0.f;
+            for (int c = 0; c < 3; c++) {
+                au += w[c] * gv[c]->u;
+                av += w[c] * gv[c]->v;
+            }
+            int px = int(std::clamp(au * scaleX, 0.f, float(texW - 1)));
+            int py = int(std::clamp(av * scaleY, 0.f, float(texH - 1)));
+            py += std::max(0, gv[0]->atlasIndex) * texH;
+            if (py >= b.image.h) continue;
+            const uint8_t* bk = &b.image.rgba[(size_t(py) * b.image.w + px) * 4];
+
+            // Expected source texel.
+            float exp[4];
+            bool have = false;
+            if (ref.present && ref.imageIndex >= 0 &&
+                size_t(ref.imageIndex) < model.images.size() &&
+                model.images[ref.imageIndex].decoded) {
+                const Image& src = model.images[ref.imageIndex];
+                int uvSet = ref.texCoord;
+                size_t uvSets = prim.vertices.empty() ? 0 : prim.vertices[0].uvsets.size();
+                if (size_t(uvSet) >= uvSets) uvSet = opt.sourceUv;
+                if (size_t(uvSet) < uvSets) {
+                    V2 suv{0.f, 0.f};
+                    for (int c = 0; c < 3; c++) {
+                        const SourceVertex& sv =
+                            prim.vertices[std::min<size_t>(
+                                tri.cornerOf[c] == 0 ? tri.st.v0
+                                : tri.cornerOf[c] == 1 ? tri.st.v1
+                                                       : tri.st.v2,
+                                prim.vertices.size() - 1)];
+                        V2 raw = sv.uvsets[uvSet];
+                        V2 st = transformUv(raw, ref.transform);
+                        suv.u += w[c] * st.u;
+                        suv.v += w[c] * st.v;
+                    }
+                    float got[4];
+                    sampleBytes(src.w, src.h, src.rgba.data(), suv.u, suv.v, Filter::Nearest, true,
+                                got);
+                    for (int i = 0; i < 4; i++) exp[i] = got[i] * 255.f;
+                    have = true;
+                }
+            } else {
+                uint8_t fc[4];
+                if (factorTexel(m, b.type, fc)) {
+                    for (int i = 0; i < 4; i++) exp[i] = fc[i];
+                    have = true;
+                }
+            }
+            if (!have) continue;
+            n++;
+            bool agree = true;
+            for (int i = 0; i < 4 && agree; i++)
+                if (std::fabs(float(bk[i]) - exp[i]) >= 40.f) agree = false;
+            if (agree) ok++;
+        }
+        std::string tag = "self-check '" + group.name + "' " + texTypeName(b.type);
+        if (b.material >= 0) tag += " (mat " + std::to_string(b.material) + ")";
+        if (n == 0) {
+            report.info(tag + ": no covered samples");
+            continue;
+        }
+        float pct = 100.f * float(ok) / float(n);
+        report.info(tag + ": " + std::to_string(ok) + "/" + std::to_string(n) + " (" +
+                    [&] {
+                        std::ostringstream os;
+                        os << std::fixed << std::setprecision(1) << pct;
+                        return os.str();
+                    }() +
+                    "%)");
+        if (pct < 85.f)
+            report.warn(tag + ": low agreement " + std::to_string(int(pct)) +
+                        "% — texture transfer may be inaccurate");
     }
     return true;
 }

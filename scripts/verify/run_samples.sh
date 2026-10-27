@@ -162,6 +162,19 @@ python3 "$ROOT/scripts/verify/check_bake.py" "$WORK/nonsquare/DamagedHelmet.gltf
     "$SAMPLES/DamagedHelmet/glTF/Default_albedo.jpg" "$MP" >/dev/null 2>&1 \
     && ok "non-square bake agreement (check_bake.py)" || bad "non-square bake agreement (check_bake.py)"
 
+# M3.2: --self-check N — the CLI itself samples baked texels against the
+# source and reports agreement per rebuilt image; normal maps are skipped.
+expect "self-check exit 0" 0 \
+    "$BIN" regenerate "$MP" -o "$WORK/selfcheck" --atlas-mode scene --self-check 2000 --quiet
+if grep -q "self-check 'scene_0' basecolor: [0-9]*/2000" "$WORK/selfcheck/report.txt" 2>/dev/null; then
+    ok "self-check: agreement line in report"
+else
+    bad "self-check: agreement line in report"
+fi
+grep -q "self-check.*normal: skipped" "$WORK/selfcheck/report.txt" 2>/dev/null \
+    && ok "self-check: normal map marked skipped" || bad "self-check: normal map marked skipped"
+expect "self-check bad value" 2 "$BIN" regenerate "$MP" -o "$WORK/selfcheck2" --self-check 0
+
 # texture placement option: gltf embedded (data URIs, no textures dir) vs external
 EMB="$WORK/boom-texembed"
 BBI="$SAMPLES/BoomBox/glTF/BoomBox.gltf"

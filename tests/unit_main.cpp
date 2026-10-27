@@ -564,6 +564,60 @@ static void testNonSquareAtlas() {
     }
 }
 
+static void testSelfCheck() {
+    // A quadrant texture distinguishes all four regions; the statistical
+    // self-check must agree with the source and flag nothing.
+    Model model = makeQuadModel();
+    Image img;
+    img.name = "quadrants";
+    img.w = 4;
+    img.h = 4;
+    img.decoded = true;
+    img.rgba.assign(4 * 4 * 4, 0);
+    for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 4; x++) {
+            uint8_t* p = &img.rgba[(y * 4 + x) * 4];
+            bool right = x >= 2, top = y < 2;
+            if (top && !right) { p[0] = 255; }
+            else if (top && right) { p[1] = 255; }
+            else if (!right) { p[2] = 255; }
+            else { p[0] = p[1] = p[2] = 255; }
+            p[3] = 255;
+        }
+    Material m;
+    m.name = "m0";
+    m.tex[int(TexType::BaseColor)].present = true;
+    m.tex[int(TexType::BaseColor)].imageIndex = 0;
+    m.tex[int(TexType::BaseColor)].texCoord = 0;
+    model.images.push_back(std::move(img));
+    model.materials.push_back(m);
+
+    AtlasGroup group;
+    group.id = 0;
+    group.name = "t";
+    group.primitives = {0};
+    group.materials = {0};
+    GenOptions go;
+    go.resolutionW = go.resolutionH = 64;
+    go.padding = 1;
+    Report rep;
+    std::string err;
+    AtlasGen gen;
+    CHECK(generateAtlas(model, group, 0, go, gen, rep, err));
+    BakeOptions bo;
+    bo.filter = Filter::Nearest;
+    std::vector<BakedImage> baked;
+    CHECK(bakeGroup(model, group, gen, bo, baked, rep, err));
+
+    selfCheckGroup(model, group, gen, bo, baked, 400, rep);
+    bool sawLine = false;
+    for (const auto& i : rep.infos())
+        if (i.find("self-check 't' basecolor:") == 0) sawLine = true;
+    CHECK(sawLine);
+    for (const auto& w : rep.warnings())
+        CHECK(w.find("low agreement") == std::string::npos);
+}
+
 int main() {
     testNormalIdentity();
     testNormalFlatRotation();
@@ -577,6 +631,7 @@ int main() {
     testBakeFactors();
     testMultiPageAtlas();
     testNonSquareAtlas();
+    testSelfCheck();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

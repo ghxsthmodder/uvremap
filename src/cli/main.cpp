@@ -32,6 +32,7 @@ struct Args {
     int padding = 4;
     float texelsPerUnit = 0.f;
     int sourceUv = 0, targetUv = 0;
+    int selfCheck = 0;
     bool dryRun = false, force = false, verbose = false, quiet = false;
     bool bakeFactors = false;
     bool hasUvSet = false;
@@ -86,6 +87,9 @@ regenerate/preview options:
                                slots that have no image; the neutralized
                                factor then lives in the texture only
       --texture-size WxH       resolution of rebuilt textures
+      --self-check N           statistically verify baked textures against the
+                               source (N random samples per rebuilt image);
+                               agreement percentages go to the report
       --format FORMAT          gltf | glb
       --textures MODE          external | embedded (gltf only; default external,
                                glb always embeds)
@@ -137,6 +141,11 @@ int parseArgs(int argc, char** argv, Args& a) {
         } else if (s == "--padding") {
             if (!next(i, v) || !parseInt(v, a.padding) || a.padding < 1) {
                 a.error = "invalid --padding";
+                return 2;
+            }
+        } else if (s == "--self-check") {
+            if (!next(i, v) || !parseInt(v, a.selfCheck) || a.selfCheck < 1) {
+                a.error = "invalid --self-check (expect sample count >= 1)";
                 return 2;
             }
         } else if (s == "--texels-per-unit") {
@@ -388,6 +397,7 @@ int cmdRegenerate(const Args& a) {
     o.texelsPerUnit = a.texelsPerUnit;
     o.sourceUv = a.sourceUv;
     o.targetUv = a.targetUv;
+    o.selfCheck = a.selfCheck;
     o.textureW = a.textureW;
     o.textureH = a.textureH;
     if (!a.filterStr.empty() && a.filterStr != "nearest" && a.filterStr != "linear") {

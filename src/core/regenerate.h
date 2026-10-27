@@ -17,6 +17,7 @@ struct RegenOptions {
     float texelsPerUnit = 0.f;
     int sourceUv = 0;
     int targetUv = 0;
+    int selfCheck = 0;  // >0: sample N points per baked image and report agreement
     Filter filter = Filter::Linear;
     bool bakeFactors = false;      // fold material factors into texture-less slots
     int textureW = 0, textureH = 0;

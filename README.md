@@ -185,6 +185,14 @@ autorização explícita.
   `--texture-size WIDTHxHEIGHT`       Resolução das imagens de textura
                                       reconstruídas.
 
+  `--self-check N`                    Amostra N pontos aleatórios por
+                                      imagem reconstruída e confere a
+                                      concordância com a textura de origem
+                                      (percentuais no `report.txt`; mapas
+                                      de normal são pulados, pois o rebake
+                                      em quadro tangente não é comparável
+                                      texel a texel).
+
   `--format FORMAT`                   Formato do modelo de saída: `gltf`
                                       ou `glb`.
 

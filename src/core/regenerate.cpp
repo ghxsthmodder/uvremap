@@ -256,6 +256,10 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
         }
         rep.stats.primitivesProcessed += int(atlases[gi].primitives.size());
     }
+    if (o.selfCheck > 0) {
+        for (size_t gi = 0; gi < nGroups; gi++)
+            selfCheckGroup(model, groups[gi], gens[gi], bo, atlases[gi].baked, o.selfCheck, rep);
+    }
     rep.stats.primitivesSkipped =
         rep.stats.primitivesTotal - rep.stats.primitivesProcessed;
 

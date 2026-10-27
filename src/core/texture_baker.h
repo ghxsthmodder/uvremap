@@ -29,4 +29,12 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
 // Neutral fill values for uncovered texels, per texture type.
 void neutralTexel(TexType t, uint8_t out[4]);
 
+// Statistically verify baked atlases against the source textures: samples
+// nSamples random points per baked image (excluding normal maps, whose
+// tangent-frame rebake cannot be compared texel-wise) and reports agreement
+// percentages through the report. Non-fatal; meant for --self-check.
+bool selfCheckGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
+                    const BakeOptions& opt, const std::vector<BakedImage>& baked, int nSamples,
+                    Report& report);
+
 }  // namespace uvremap
