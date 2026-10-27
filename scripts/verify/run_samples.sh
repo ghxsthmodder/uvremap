@@ -66,6 +66,20 @@ run_model Shoe           "$SAMPLES/MaterialsVariantsShoe/glTF-Binary/MaterialsVa
 # KHR_texture_transform rotation models: rebuilt since v0.1.3 (M1.1)
 run_model TexTransformMulti "$SAMPLES/TextureTransformMultiTest/glTF-Binary/TextureTransformMultiTest.glb" 0
 
+# draco/meshopt compressed meshes: refused with a clear message (M1.3), never garbled
+for comp in DragonAttenuation/glTF-Meshopt/DragonAttenuation.gltf \
+            DragonAttenuation/glTF-Meshopt-EXT/DragonAttenuation.gltf \
+            VirtualCity/glTF-Draco/VirtualCity.gltf \
+            CarConcept/glTF-KTX-BasisU-Draco/CarConcept.gltf; do
+    "$BIN" scan "$SAMPLES/$comp" >/dev/null 2>"$WORK/comp.err"
+    got=$?
+    if [ "$got" = 3 ] && grep -q "compressed geometry" "$WORK/comp.err"; then
+        ok "compressed refused cleanly: $comp"
+    else
+        bad "compressed refused cleanly: $comp (exit $got)"; sed -n '1,3p' "$WORK/comp.err" | sed 's/^/      /'
+    fi
+done
+
 # input immutability: hash all sample inputs before/after is impractical here; check one:
 SRC="$SAMPLES/BoomBox/glTF-Binary/BoomBox.glb"
 H1=$(sha256sum "$SRC" | cut -d' ' -f1)

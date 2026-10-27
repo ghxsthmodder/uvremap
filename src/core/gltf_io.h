@@ -13,6 +13,9 @@ namespace uvremap {
 // lists (4), preserving winding; other modes are returned unchanged.
 std::vector<uint32_t> triangulateIndices(int mode, const std::vector<uint32_t>& in);
 
+// True for KHR_draco_mesh_compression / (K|EXT_)meshopt_compression names.
+bool isCompressionExtName(const std::string& n);
+
 struct SaveOptions {
     std::string outputDir;       // directory where model + assets are written
     std::string modelFilename;   // e.g. "model.gltf" / "model.glb"

@@ -3,6 +3,8 @@
 #include <cmath>
 #include <string>
 
+#include "core/gltf_io.h"
+
 namespace uvremap {
 
 bool textureBakeable(const Model& model, int matIdx, TexType t) {
@@ -18,6 +20,10 @@ std::string eligibilityReason(const Model& model, int primIdx, int sourceUv) {
     if (p.hasMorphTargets)
         return "has morph targets (unsupported for regeneration in this version)";
     if (!p.extensionNames.empty()) {
+        for (const std::string& e : p.extensionNames)
+            if (isCompressionExtName(e))
+                return "uses " + e +
+                       " (compressed geometry); decoding is not supported in this version";
         std::string names;
         for (const std::string& e : p.extensionNames) {
             if (!names.empty()) names += ", ";

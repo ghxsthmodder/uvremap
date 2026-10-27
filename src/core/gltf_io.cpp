@@ -15,10 +15,16 @@
 #include <filesystem>
 #include <fstream>
 #include <set>
+#include <sstream>
 
 namespace fs = std::filesystem;
 
 namespace uvremap {
+
+bool isCompressionExtName(const std::string& n) {
+    return n == "KHR_draco_mesh_compression" || n == "EXT_meshopt_compression" ||
+           n == "KHR_meshopt_compression";
+}
 
 std::vector<uint32_t> triangulateIndices(int mode, const std::vector<uint32_t>& in) {
     if (mode != 5 && mode != 6) return in;
@@ -297,6 +303,28 @@ bool noopImageLoader(tinygltf::Image*, const int, std::string*, std::string*, in
     return true;
 }
 
+// meshopt glTF keeps its payload in a uri-less fallback buffer that tinygltf
+// rejects outright; detect required compression extensions in the raw JSON text
+// first so the failure message is actionable. Returns the extension name, or
+// "" if none is required. (Text scan of the extensionsRequired array only, so
+// extensions merely declared-but-optional do not trigger rejection.)
+std::string jsonCompressionExt(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    std::string s = ss.str();
+    size_t key = s.find("\"extensionsRequired\"");
+    if (key == std::string::npos) return "";
+    size_t open = s.find('[', key);
+    size_t close = s.find(']', open);
+    if (open == std::string::npos || close == std::string::npos) return "";
+    std::string arr = s.substr(open, close - open + 1);
+    for (const char* cand : {"KHR_draco_mesh_compression", "EXT_meshopt_compression",
+                             "KHR_meshopt_compression"})
+        if (arr.find(cand) != std::string::npos) return cand;
+    return "";
+}
+
 }  // namespace
 
 // ================================================================ Impl
@@ -331,6 +359,14 @@ struct GltfDocument::Impl {
         out.nodeCount = int(tg.nodes.size());
         out.animationCount = int(tg.animations.size());
         out.extensionsUsed = tg.extensionsUsed;
+        for (const auto& e : tg.extensionsRequired) {
+            if (isCompressionExtName(e)) {
+                err = "input requires " + e +
+                      " (compressed geometry); decoding compressed meshes is not "
+                      "supported in this version — provide an uncompressed copy";
+                return false;
+            }
+        }
 
         // Images: read raw bytes + decode with stb.
         out.images.resize(tg.images.size());
@@ -411,6 +447,20 @@ struct GltfDocument::Impl {
                 p.meshName = mesh.name;
                 p.hasMorphTargets = !tp.targets.empty();
                 for (const auto& e : tp.extensions) p.extensionNames.push_back(e.first);
+                {
+                    bool compressed = false;
+                    for (const auto& e : tp.extensions) {
+                        if (isCompressionExtName(e.first)) {
+                            rep.warn("mesh[" + std::to_string(mi) + "]/prim[" +
+                                     std::to_string(pi) + "]: " + e.first +
+                                     " (compressed geometry) cannot be decoded in this "
+                                     "version; primitive left unchanged");
+                            compressed = true;
+                            break;
+                        }
+                    }
+                    if (compressed) continue;
+                }
 
                 std::vector<float> pos, nrm, tan, col;
                 std::vector<uint32_t> idx, joints;
@@ -535,6 +585,15 @@ bool GltfDocument::load(const std::string& path, Model& out, Report& report,
     if (!fs::exists(path)) {
         err = "input file does not exist: " + path;
         return false;
+    }
+    if (path.size() >= 5 && path.substr(path.size() - 5) == ".gltf") {
+        std::string comp = jsonCompressionExt(path);
+        if (!comp.empty()) {
+            err = "input requires " + comp +
+                  " (compressed geometry); decoding compressed meshes is not "
+                  "supported in this version — provide an uncompressed copy";
+            return false;
+        }
     }
     if (!impl_->load(path, out, report)) {
         err = impl_->err;
