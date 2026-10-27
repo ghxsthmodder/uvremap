@@ -52,6 +52,9 @@ std::string renderDryRunPlan(const Model& model, const std::vector<AtlasGroup>& 
     os << "Dry run — planned operations for '" << opt.output << "':\n";
     os << "  atlas mode: " << atlasModeName(opt.mode) << "\n";
     os << "  format: " << (opt.binary ? "glb" : "gltf") << "\n";
+    if (!opt.binary)
+        os << "  textures: " << (opt.embedTextures ? "embedded (base64)" : "external files")
+           << "\n";
     os << "  source UV: " << opt.sourceUv << "  target UV: " << opt.targetUv << "\n";
     os << "  filter: " << (opt.filter == Filter::Nearest ? "nearest" : "linear")
        << "  padding: " << opt.padding << " texels\n";
@@ -226,6 +229,7 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
     so.outputDir = staging.string();
     so.modelFilename = modelPath.filename().string();
     so.binary = o.binary;
+    so.embedTextures = o.embedTextures && !o.binary;
     so.targetUv = o.targetUv;
     if (!doc.save(model, atlases, so, rep, err)) {
         progress(5, "Exporting assets", false);

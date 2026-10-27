@@ -78,6 +78,21 @@ H2=$(sha256sum "$SRC" | cut -d' ' -f1)
         "$SAMPLES/BoomBox/glTF/BoomBox_baseColor.png" >/dev/null 2>&1 \
     && ok "bake agreement (check_bake.py)" || bad "bake agreement (check_bake.py)"
 
+# texture placement option: gltf embedded (data URIs, no textures dir) vs external
+EMB="$WORK/boom-texembed"
+BBI="$SAMPLES/BoomBox/glTF/BoomBox.gltf"
+expect "textures embedded (gltf) exit 0" 0 \
+    "$BIN" regenerate "$BBI" -o "$EMB" --atlas-mode material --format gltf --textures embedded --quiet
+if [ -d "$EMB" ]; then
+    grep -q 'data:image' "$EMB/BoomBox.gltf" && ok "embedded: data URIs present" || bad "embedded: no data URIs"
+    [ ! -d "$EMB/textures" ] && ok "embedded: no textures dir" || bad "embedded: textures dir created"
+    expect "embedded: reparse" 0 "$BIN" scan "$EMB/BoomBox.gltf"
+fi
+expect "external + glb rejected" 2 \
+    "$BIN" regenerate "$BBI" -o "$WORK/texext-glb" --atlas-mode material --format glb --textures external
+expect "invalid --textures value" 2 \
+    "$BIN" regenerate "$BBI" -o "$WORK/texbogus" --atlas-mode material --textures bogus
+
 echo
 echo "verify: $PASS passed, $FAIL failed"
 rm -rf "$WORK"

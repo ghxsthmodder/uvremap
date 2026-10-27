@@ -161,6 +161,13 @@ autorização explícita.
   `--format FORMAT`                   Formato do modelo de saída: `gltf`
                                       ou `glb`.
 
+  `--textures MODE`                   Destino das texturas na saída `gltf`:
+                                      `external` (arquivos em `textures/`,
+                                      padrão) ou `embedded` (base64 dentro
+                                      do `.gltf`). Saída `glb` sempre embute
+                                      as texturas; `external` com `glb` é
+                                      rejeitado.
+
   `--dry-run`                         Valida a entrada e apresenta o
                                       plano sem gravar os arquivos
                                       finais.

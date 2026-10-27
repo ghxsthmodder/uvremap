@@ -26,7 +26,7 @@ struct Args {
     std::string input;
     std::vector<std::string> positional;
     std::string output;
-    std::string atlasMode, format, filterStr;
+    std::string atlasMode, format, filterStr, textures;
     int resolutionW = 0, resolutionH = 0;
     int textureW = 0, textureH = 0;
     int padding = 4;
@@ -81,6 +81,8 @@ regenerate/preview options:
       --texture-filter MODE    nearest | linear (default linear)
       --texture-size WxH       resolution of rebuilt textures
       --format FORMAT          gltf | glb
+      --textures MODE          external | embedded (gltf only; default external,
+                               glb always embeds)
       --dry-run                validate and print the plan without writing
       --force                  allow overwriting existing output files
       --verbose                extra detail
@@ -157,6 +159,9 @@ int parseArgs(int argc, char** argv, Args& a) {
         } else if (s == "--format") {
             if (!next(i, v)) return 2;
             a.format = v;
+        } else if (s == "--textures") {
+            if (!next(i, v)) return 2;
+            a.textures = v;
         } else if (s == "--dry-run") {
             a.dryRun = true;
         } else if (s == "--force") {
@@ -387,6 +392,16 @@ int cmdRegenerate(const Args& a) {
         }
         o.formatSet = true;
     }
+    if (!a.textures.empty() && a.textures != "external" && a.textures != "embedded") {
+        std::cerr << "invalid --textures: " << a.textures << " (external | embedded)\n";
+        return 2;
+    }
+    if (o.binary && a.textures == "external") {
+        std::cerr << "--textures external is not valid with glb output (glb embeds "
+                     "textures); use --format gltf\n";
+        return 2;
+    }
+    if (a.textures == "embedded") o.embedTextures = true;
     o.dryRun = a.dryRun;
     o.force = a.force;
     o.verbose = a.verbose;

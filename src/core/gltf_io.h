@@ -13,6 +13,8 @@ struct SaveOptions {
     std::string outputDir;       // directory where model + assets are written
     std::string modelFilename;   // e.g. "model.gltf" / "model.glb"
     bool binary = false;         // true = glb
+    bool embedTextures = false;  // gltf: write images as base64 data URIs
+                                 // instead of files under texturesDir
     int targetUv = 0;            // TEXCOORD set receiving the new mapping
     std::string texturesDir = "textures";
 };

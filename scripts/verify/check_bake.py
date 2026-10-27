@@ -70,7 +70,10 @@ def read_accessor(j, idx):
 def image_bytes(j, i):
     img = j['images'][i]
     if 'uri' in img:
-        with open(os.path.join(BASE, img['uri']), 'rb') as f:
+        uri = img['uri']
+        if uri.startswith('data:'):
+            return base64.b64decode(uri.split(',', 1)[1])
+        with open(os.path.join(BASE, uri), 'rb') as f:
             return f.read()
     bv = j['bufferViews'][img['bufferView']]
     buf = buffer_bytes(j, bv['buffer'])

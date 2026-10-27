@@ -9,6 +9,7 @@
 #include "core/validate.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -637,6 +638,37 @@ int addIndicesAccessor(tinygltf::Model& tg, BufWriter& bw,
     return int(tg.accessors.size()) - 1;
 }
 
+std::string encodeBase64(const uint8_t* p, size_t n) {
+    std::string out;
+    out.reserve((n + 2) / 3 * 4);
+    for (size_t i = 0; i + 2 < n; i += 3) {
+        uint32_t v = (p[i] << 16) | (p[i + 1] << 8) | p[i + 2];
+        out += {kB64[v >> 18], kB64[(v >> 12) & 63], kB64[(v >> 6) & 63], kB64[v & 63]};
+    }
+    if (n % 3 == 1) {
+        uint32_t v = p[n - 1] << 16;
+        out += {kB64[v >> 18], kB64[(v >> 12) & 63], '=', '='};
+    } else if (n % 3 == 2) {
+        uint32_t v = (p[n - 2] << 16) | (p[n - 1] << 8);
+        out += {kB64[v >> 18], kB64[(v >> 12) & 63], kB64[(v >> 6) & 63], '='};
+    }
+    return out;
+}
+
+std::string guessImageMime(const std::string& uri, const uint8_t* raw, size_t n) {
+    if (raw && n >= 3 && raw[0] == 0xFF && raw[1] == 0xD8) return "image/jpeg";
+    if (raw && n >= 8 && raw[1] == 'P' && raw[2] == 'N' && raw[3] == 'G') return "image/png";
+    fs::path ext = fs::path(uri).extension();
+    std::string e = ext.string();
+    for (auto& c : e) c = char(std::tolower(c));
+    if (e == ".jpg" || e == ".jpeg") return "image/jpeg";
+    return "image/png";
+}
+
+std::string dataUri(const std::string& mime, const uint8_t* p, size_t n) {
+    return "data:" + mime + ";base64," + encodeBase64(p, n);
+}
+
 }  // namespace
 
 bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlases,
@@ -659,7 +691,7 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
 
     fs::path outDir(opt.outputDir);
     fs::path texDir = outDir / opt.texturesDir;
-    if (!opt.binary) fs::create_directories(texDir);
+    if (!opt.binary && !opt.embedTextures) fs::create_directories(texDir);
 
     // primId -> atlas
     std::vector<int> primAtlas(core.primitives.size(), -1);
@@ -691,6 +723,12 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
             ti.name = base;
             ti.bufferView = int(tg.bufferViews.size()) - 1;
             ti.mimeType = "image/png";
+            tg.images.push_back(ti);
+            imageIdx = int(tg.images.size()) - 1;
+        } else if (opt.embedTextures) {
+            tinygltf::Image ti;
+            ti.name = base;
+            ti.uri = dataUri("image/png", png.data(), png.size());
             tg.images.push_back(ti);
             imageIdx = int(tg.images.size()) - 1;
         } else {
@@ -875,6 +913,40 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
                                   : "image/png";
                 ti.uri.clear();
             }
+        } else if (opt.embedTextures) {
+            if (ti.uri.rfind("data:", 0) == 0) continue;  // already embedded
+            if (!src.raw.empty()) {
+                ti.uri = dataUri(guessImageMime(ti.uri, src.raw.data(), src.raw.size()),
+                                 src.raw.data(), src.raw.size());
+            } else if (ti.bufferView >= 0 && ti.bufferView < int(tg.bufferViews.size())) {
+                const tinygltf::BufferView& bv = tg.bufferViews[ti.bufferView];
+                const std::vector<unsigned char>& buf = tg.buffers[bv.buffer].data;
+                if (bv.byteOffset + bv.byteLength > buf.size()) {
+                    report.warn("image[" + std::to_string(i) +
+                                "] buffer view out of range; reference kept");
+                    continue;
+                }
+                ti.uri = dataUri(ti.mimeType.empty() ? std::string("image/png") : ti.mimeType,
+                                 buf.data() + bv.byteOffset, bv.byteLength);
+            } else if (src.decoded) {
+                Raster r;
+                r.w = src.w;
+                r.h = src.h;
+                r.rgba = src.rgba;
+                std::vector<uint8_t> png;
+                if (!encodePng(r, png)) {
+                    report.warn("image[" + std::to_string(i) +
+                                "] could not be re-encoded; reference kept");
+                    continue;
+                }
+                ti.uri = dataUri("image/png", png.data(), png.size());
+            } else {
+                report.warn("image[" + std::to_string(i) +
+                            "] could not be embedded; reference kept");
+                continue;
+            }
+            ti.bufferView = -1;
+            ti.mimeType.clear();
         } else {
             if (!ti.uri.empty() && ti.bufferView < 0) {
                 std::string rel = opt.texturesDir + "/" + sanitizeName(fs::path(ti.uri).filename().string());

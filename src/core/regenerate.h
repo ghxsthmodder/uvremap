@@ -20,6 +20,7 @@ struct RegenOptions {
     Filter filter = Filter::Linear;
     int textureW = 0, textureH = 0;
     bool binary = true;            // glb default unless --format gltf
+    bool embedTextures = false;    // gltf: base64 data URIs instead of files
     bool formatSet = false;
     bool dryRun = false;
     bool force = false;
