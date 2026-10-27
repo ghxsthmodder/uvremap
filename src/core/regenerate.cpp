@@ -322,6 +322,17 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
         rf << "\n" << rep.renderText("");
     }
 
+    if (o.json) {
+        ReportMeta meta;
+        meta.tool = "uvremap";
+        meta.version = UVREMAP_VERSION;
+        meta.input = input;
+        meta.output = o.output;
+        meta.atlasMode = atlasModeName(o.mode);
+        std::ofstream jf(staging / "report.json");
+        jf << rep.renderJson(meta);
+    }
+
     if (!o.force && fs::exists(outDir) && !fs::is_empty(outDir)) {
         std::string e2;
         // outDir exists and has content but modelPath didn't exist: still fine to

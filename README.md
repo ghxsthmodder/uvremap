@@ -217,6 +217,13 @@ autorização explícita.
                                       branco-preto e mapa de calor de
                                       densidade de texels, escala log).
 
+  `--json`                            Escreve `report.json` no diretório
+                                      de saída e imprime o relatório
+                                      final em JSON na saída padrão
+                                      (stats, avisos, informações e
+                                      erros) em vez do resumo legível,
+                                      para integração em pipelines.
+
   `--force`                           Autoriza a sobrescrita de arquivos
                                       existentes no destino.
 

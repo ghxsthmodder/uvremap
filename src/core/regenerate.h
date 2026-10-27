@@ -29,6 +29,7 @@ struct RegenOptions {
     bool verbose = false;
     bool quiet = false;
     bool writePreviews = false;
+    bool json = false;  // write report.json alongside report.txt
     // (step 1..5, label, ok) — called after each pipeline phase.
     std::function<void(int, const std::string&, bool)> progress;
 };

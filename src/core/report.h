@@ -26,6 +26,11 @@ struct Stats {
     int imagesWritten = 0;
 };
 
+// Context fields for the JSON serialization (not stored in Report itself).
+struct ReportMeta {
+    std::string tool, version, input, output, atlasMode;
+};
+
 class Report {
   public:
     void warn(const std::string& msg) { warnings_.push_back(msg); }
@@ -48,6 +53,7 @@ class Report {
     Stats stats;
 
     std::string renderText(const std::string& header) const;
+    std::string renderJson(const ReportMeta& meta) const;
 
   private:
     std::vector<std::string> warnings_, infos_, errors_;

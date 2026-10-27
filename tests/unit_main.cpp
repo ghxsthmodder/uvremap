@@ -651,6 +651,26 @@ static void testPreviewRenderers() {
     }
 }
 
+static void testRenderJson() {
+    Report rep;
+    rep.stats.primitivesTotal = 3;
+    rep.stats.atlasCount = 2;
+    rep.warn("quote\" and newline\n");
+    rep.info("plain");
+    ReportMeta meta;
+    meta.tool = "uvremap";
+    meta.version = "0.0.0";
+    meta.input = "in.glb";
+    meta.output = "out";
+    meta.atlasMode = "per-material";
+    std::string j = rep.renderJson(meta);
+    CHECK(j.find("\"tool\": \"uvremap\"") != std::string::npos);
+    CHECK(j.find("\"primitivesTotal\": 3") != std::string::npos);
+    CHECK(j.find("\\\"") != std::string::npos);   // escaped quote
+    CHECK(j.find("\\n") != std::string::npos);    // escaped newline
+    CHECK(j.find("\"atlasMode\": \"per-material\"") != std::string::npos);
+}
+
 int main() {
     testNormalIdentity();
     testNormalFlatRotation();
@@ -666,6 +686,7 @@ int main() {
     testNonSquareAtlas();
     testSelfCheck();
     testPreviewRenderers();
+    testRenderJson();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

@@ -35,6 +35,7 @@ struct Args {
     int selfCheck = 0;
     bool dryRun = false, force = false, verbose = false, quiet = false;
     bool preview = false;
+    bool json = false;
     bool bakeFactors = false;
     bool hasUvSet = false;
     std::string error;
@@ -98,6 +99,9 @@ regenerate/preview options:
       --preview                write diagnostic PNGs next to the output: atlas
                                layout, source-vs-atlas comparison, occupancy and
                                texel-density heatmaps
+      --json                   write report.json in the output and print the
+                               final report as JSON on stdout instead of the
+                               human-readable summary
       --force                  allow overwriting existing output files
       --verbose                extra detail
       --quiet                  minimal output
@@ -187,6 +191,8 @@ int parseArgs(int argc, char** argv, Args& a) {
             a.dryRun = true;
         } else if (s == "--preview") {
             a.preview = true;
+        } else if (s == "--json") {
+            a.json = true;
         } else if (s == "--force") {
             a.force = true;
         } else if (s == "--verbose") {
@@ -433,11 +439,12 @@ int cmdRegenerate(const Args& a) {
     if (a.textures == "embedded") o.embedTextures = true;
     o.dryRun = a.dryRun;
     o.writePreviews = a.preview;
+    o.json = a.json;
     o.force = a.force;
     o.verbose = a.verbose;
     o.quiet = a.quiet;
 
-    if (!a.quiet)
+    if (!a.quiet && !a.json)
         std::cout << "uvremap " UVREMAP_VERSION << "\n\nInput:       " << a.input
                   << "\nOutput:      " << o.output << "\nAtlas mode:  " << a.atlasMode
                   << "\n\n";
@@ -453,16 +460,26 @@ int cmdRegenerate(const Args& a) {
     };
 
     o.progress = [&](int n, const std::string& name, bool ok) {
-        if (a.quiet || a.dryRun) return;
+        if (a.quiet || a.dryRun || a.json) return;
         step(n, name, ok);
     };
     RegenResult r = runRegenerate(a.input, o);
-    if (!r.message.empty()) std::cout << r.message;
+    if (!a.json && !r.message.empty()) std::cout << r.message;
     if (r.code != ExitCode::Success) {
         std::cerr << "uvremap: " << (r.message.empty() ? r.report.renderText("") : "") << "\n";
         return int(r.code);
     }
     if (a.dryRun) return 0;
+    if (a.json) {
+        ReportMeta meta;
+        meta.tool = "uvremap";
+        meta.version = UVREMAP_VERSION;
+        meta.input = a.input;
+        meta.output = o.output;
+        meta.atlasMode = a.atlasMode;
+        std::cout << r.report.renderJson(meta);
+        return 0;
+    }
     const Stats& s = r.report.stats;
     if (!a.quiet) {
         std::cout << "\nSummary:\n"

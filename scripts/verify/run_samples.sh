@@ -198,6 +198,23 @@ else
     bad "preview: output dir missing"
 fi
 
+# M3.4: --json writes report.json and prints the report as JSON on stdout
+expect "json exit 0" 0 \
+    "$BIN" regenerate "$MP" -o "$WORK/jsonout" --atlas-mode scene --json
+if python3 - "$WORK/jsonout/report.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d['tool'] == 'uvremap' and 'stats' in d
+assert isinstance(d['warnings'], list) and 'warningCount' in d
+PY
+then ok "json: report.json parses"; else bad "json: report.json parses"; fi
+if python3 - "$WORK/stdout" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d['stats']['atlasCount'] >= 1
+PY
+then ok "json: stdout is pure JSON"; else bad "json: stdout is pure JSON"; fi
+
 # texture placement option: gltf embedded (data URIs, no textures dir) vs external
 EMB="$WORK/boom-texembed"
 BBI="$SAMPLES/BoomBox/glTF/BoomBox.gltf"
