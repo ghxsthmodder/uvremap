@@ -37,6 +37,26 @@ rebakear ou transformar corretamente os mapas de normal para o novo UV
 mapping. Recursos que ainda não puderem ser processados com segurança
 devem gerar avisos explícitos, e não ser silenciosamente alterados.
 
+## Instalação
+
+Cada release publica quatro binários:
+
+| Arquivo | Plataforma |
+|---|---|
+| `uvremap-<versão>-linux-x86_64.tar.gz` | Linux x86_64 (glibc) |
+| `uvremap-<versão>-linux-aarch64.tar.gz` | Linux ARM64 com glibc (Raspberry Pi OS 64-bit, servidores ARM) |
+| `uvremap-<versão>-android-arm64.tar.gz` | Android/Termux (arm64-v8a, API 24+) |
+| `uvremap-<versão>-windows-x64.zip` | Windows x64 |
+
+No Termux, use o pacote `android-arm64`: os binários Android não têm
+glibc, e um binário `linux-*` falhará com `cannot execute: required
+file not found`. Extraia e marque como executável:
+
+```sh
+tar -xzf uvremap-<versão>-android-arm64.tar.gz
+chmod +x uvremap && ./uvremap version
+```
+
 ## Requisitos e dependências propostas
 
 -   **C++20** --- linguagem e padrão de desenvolvimento.

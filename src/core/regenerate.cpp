@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 
 #include "core/gltf_io.h"
 #include "core/preview.h"
