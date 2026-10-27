@@ -1,8 +1,8 @@
-# Roadmap — uvremap pós-v0.1.3
+# Roadmap — uvremap pós-v0.1.4
 
-Estado: Fases 1–4 do README implementadas e verificados (golden 203/203, releases
-v0.1.0–v0.1.2 com windows-x64 / linux-x86_64 / linux-aarch64). M0 concluído e
-lançado na v0.1.3. Prioridades abaixo
+Estado: Fases 1–4 do README implementadas e verificados (golden 237/237, releases
+v0.1.0–v0.1.3 com windows-x64 / linux-x86_64 / linux-aarch64). M0 concluído
+(v0.1.3); M1 parcial (1 e 3 lançados na v0.1.4). Prioridades abaixo
 por impacto e risco.
 
 ## Política de versionamento
@@ -29,16 +29,26 @@ lançados na v0.1.3.
 
 ## M1 — Cobertura de extensões
 
+Status: itens 1 e 3 concluídos e lançados na v0.1.4 (rotação suportada no
+bake; draco/meshopt recusados com mensagem clara, exit 3). Restam 2 (variants)
+e 4 (`--bake-factors`).
+
 1. **KHR_texture_transform com rotação** — substituir o motivo de rejeição por
    suporte real na amostragem (UV de origem rotacionado em torno de offset; o
-   baker já aplica offset/scale).
+   baker já aplica offset/scale). ✔ Concluído: ordem da spec
+   (`uv' = offset + R·(uv·scale)`), primitivas com rotação voltam a ser
+   elegíveis; verificado no modelo de conformance
+   TextureTransformMultiTest (agreement 99.8% via check_bake.py).
 2. **KHR_materials_variants** — hoje torna a primitiva inelegível (Shoe → exit 4).
    Plano: rebakear as texturas de cada variante para o mesmo atlas (slots por
    variante clonados junto do material), preservando o mapeamento de variante.
 3. **Draco/meshopt** — detectar primitivas comprimidas; ou decodificar (via
    draco/meshopt quando disponíveis) ou rejeitar com aviso claro e exit 4
    honesto (hoje tinygltf sem extensões de decodificação provavelmente já
-   falha na carga — padronizar a mensagem).
+   falha na carga — padronizar a mensagem). ✔ Concluído: arquivos que exigem
+   draco/meshopt são recusados na carga com mensagem clara (exit 3);
+   primitivas comprimidas em arquivos mistos geram aviso específico e ficam
+   inalteradas.
 4. **Dobra fatores de material na textura (`--bake-factors`)** — para materiais
    sem `baseColorTexture`, escrever o `baseColorFactor` (sRGB) nos texels do
    primitivo no atlas e neutralizar o material clonado (fator branco); mesmo
