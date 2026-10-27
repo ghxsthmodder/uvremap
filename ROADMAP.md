@@ -4,7 +4,15 @@ Estado: Fases 1–4 do README implementadas e verificados (golden 203/203, relea
 v0.1.0–v0.1.2 com windows-x64 / linux-x86_64 / linux-aarch64). Prioridades abaixo
 por impacto e risco.
 
-## M0 — Correções de exatidão (v0.1.3, curar divergências silenciosas)
+## Política de versionamento
+
+Releases seguem `0.1.x`: incrementa-se o patch a cada entrega (`0.1.3`, `0.1.4`,
+… até `0.1.10`). Quando o patch chega a 10, o minor avança e o patch volta a
+zero (próxima release após `0.1.10` é `0.2.0`). Os milestones abaixo não
+carregam versão própria; são entregues em releases 0.1.x sucessivas até estourar
+a série.
+
+## M0 — Correções de exatidão (curar divergências silenciosas)
 
 1. **Primitive mode strip/fan** — hoje `TRIANGLE_STRIP`/`TRIANGLE_FAN` são lidos
    como lista de triângulos sem aviso (silenciosamente errados). Converter para
@@ -15,7 +23,7 @@ por impacto e risco.
 3. **Testes de regressão sintéticos** — unidade de modelo com twins colocalizados
    (bug do doghouse) e strip/fan, para a matriz golden não depender só de assets.
 
-## M1 — Cobertura de extensões (v0.2.0)
+## M1 — Cobertura de extensões
 
 1. **KHR_texture_transform com rotação** — substituir o motivo de rejeição por
    suporte real na amostragem (UV de origem rotacionado em torno de offset; o
@@ -27,8 +35,18 @@ por impacto e risco.
    draco/meshopt quando disponíveis) ou rejeitar com aviso claro e exit 4
    honesto (hoje tinygltf sem extensões de decodificação provavelmente já
    falha na carga — padronizar a mensagem).
+4. **Dobra fatores de material na textura (`--bake-factors`)** — para materiais
+   sem `baseColorTexture`, escrever o `baseColorFactor` (sRGB) nos texels do
+   primitivo no atlas e neutralizar o material clonado (fator branco); mesmo
+   mecanismo para `metallicRoughnessFactor` (G/B), `emissiveFactor` e
+   `occlusionStrength` (R). O preenchimento neutro deixa de ser global e passa
+   a ser por material. Observações: o glTF já multiplica fator×textura, então
+   o resultado visual atual está correto — a opção serve para fundir várias
+   primitivas de cores planas em uma única textura/material por atlas;
+   atenção à quantização 8-bit de fatores sutis e sangramento de cor no
+   padding/mips entre ilhas.
 
-## M2 — Atlas multi-página e resoluções não quadradas (v0.3.0)
+## M2 — Atlas multi-página e resoluções não quadradas
 
 1. **Multi-página real** — hoje charts que não cabem viram aviso e região não
    mapeada (páginas >0 são descartadas). Alternativas: (a) aceitar N páginas,
