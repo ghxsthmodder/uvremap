@@ -1,8 +1,8 @@
 # Roadmap — uvremap pós-v0.1.4
 
-Estado: Fases 1–4 do README implementadas e verificados (golden 259/259, releases
-v0.1.0–v0.1.3 com windows-x64 / linux-x86_64 / linux-aarch64). M0 concluído
-(v0.1.3); M1 parcial (1 e 3 lançados na v0.1.4; 2 concluído, a lançar). Prioridades abaixo
+Estado: Fases 1–4 do README implementadas e verificados (golden 268/268, releases
+v0.1.0–v0.1.4 com windows-x64 / linux-x86_64 / linux-aarch64). M0 concluído
+(v0.1.3); M1 concluído (2 e 4 a lançar). Prioridades abaixo
 por impacto e risco.
 
 ## Política de versionamento
@@ -30,8 +30,8 @@ lançados na v0.1.3.
 ## M1 — Cobertura de extensões
 
 Status: itens 1 e 3 concluídos e lançados na v0.1.4 (rotação suportada no
-bake; draco/meshopt recusados com mensagem clara, exit 3). Item 2 concluído
-(ver abaixo), a lançar. Resta 4 (`--bake-factors`).
+bake; draco/meshopt recusados com mensagem clara, exit 3). Itens 2 e 4
+concluídos (ver abaixo), a lançar. M1 completo.
 
 1. **KHR_texture_transform com rotação** — substituir o motivo de rejeição por
    suporte real na amostragem (UV de origem rotacionado em torno de offset; o
@@ -63,6 +63,15 @@ bake; draco/meshopt recusados com mensagem clara, exit 3). Item 2 concluído
    primitivas de cores planas em uma única textura/material por atlas;
    atenção à quantização 8-bit de fatores sutis e sangramento de cor no
    padding/mips entre ilhas.
+   ✔ Concluído: `--bake-factors` pinta baseColorFactor (linear→sRGB),
+   metallicRoughness (G/B) e emissiveFactor nos texels cobertos da primitiva
+   (máscara por bounding-box do triângulo, cobre o padding) e neutraliza os
+   fatores nos materiais clonados; `occlusionStrength` fica de fora (sem
+   textura, adicionar uma mudaria o sombreado). Padrão de neutralidade segue a
+   spec (metallic=1, roughness=1; tinygltf usa os mesmos defaults). Sem a
+   flag, comportamento inalterado (fatores preservados). Verificado com modelo
+   sintético sem textura (`make_factor_model.py`) nos modos material/scene —
+   cores pintadas conferem 100% via check_bake.py (golden 268/268).
 
 ## M2 — Atlas multi-página e resoluções não quadradas
 

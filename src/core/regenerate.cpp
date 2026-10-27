@@ -58,6 +58,8 @@ std::string renderDryRunPlan(const Model& model, const std::vector<AtlasGroup>& 
     os << "  source UV: " << opt.sourceUv << "  target UV: " << opt.targetUv << "\n";
     os << "  filter: " << (opt.filter == Filter::Nearest ? "nearest" : "linear")
        << "  padding: " << opt.padding << " texels\n";
+    if (opt.bakeFactors)
+        os << "  factor bake: material factors fold into texture-less slots\n";
     os << "  atlases (" << groups.size() << "):\n";
     for (const auto& g : groups) {
         os << "    '" << g.name << "': " << g.primitives.size() << " primitive(s), "
@@ -175,6 +177,7 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
     std::vector<AtlasOutput> atlases(groups.size());
     BakeOptions bo;
     bo.filter = o.filter;
+    bo.bakeFactors = o.bakeFactors;
     bo.textureW = o.textureW;
     bo.textureH = o.textureH;
     bo.sourceUv = o.sourceUv;

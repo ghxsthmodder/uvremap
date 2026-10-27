@@ -113,25 +113,48 @@ def tex_transforms(p):
     img_cache = {}
     out = {}
     for m in j2.get('materials', []):
-        bt = (m.get('pbrMetallicRoughness') or {}).get('baseColorTexture')
-        if not bt:
+        pbr = m.get('pbrMetallicRoughness') or {}
+        bt = pbr.get('baseColorTexture')
+        factor = pbr.get('baseColorFactor')
+        if not bt and not factor:
             continue
-        kt = (bt.get('extensions') or {}).get('KHR_texture_transform', {})
-        src = j2['textures'][bt['index']]['source']
-        if src not in img_cache:
-            img_cache[src] = image_bytes(j2, src, base2)
-        out.setdefault(m.get('name', ''), []).append(dict(
-            off=kt.get('offset', [0.0, 0.0]),
-            scale=kt.get('scale', [1.0, 1.0]),
-            rot=kt.get('rotation', 0.0),
-            tc=kt.get('texCoord', bt.get('texCoord', 0)),
-            img=img_cache[src]))
+        if bt:
+            kt = (bt.get('extensions') or {}).get('KHR_texture_transform', {})
+            src = j2['textures'][bt['index']]['source']
+            if src not in img_cache:
+                img_cache[src] = image_bytes(j2, src, base2)
+            out.setdefault(m.get('name', ''), []).append(dict(
+                off=kt.get('offset', [0.0, 0.0]),
+                scale=kt.get('scale', [1.0, 1.0]),
+                rot=kt.get('rotation', 0.0),
+                tc=kt.get('texCoord', bt.get('texCoord', 0)),
+                img=img_cache[src]))
+        else:
+            out.setdefault(m.get('name', ''), []).append(dict(factor=factor))
     return out
 
 
-transforms = tex_transforms(src_model_path)
+def linear_to_srgb_byte(c):
+    c = max(0.0, min(1.0, c))
+    v = 12.92 * c if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
+    return int(round(v * 255))
 
-orig = to_img(open(orig_path, 'rb').read())
+
+def factor_image(f):
+    rgb = [linear_to_srgb_byte(c) for c in f[:3]]
+    return np.zeros((2, 2, 3), dtype=np.float64) + rgb
+
+
+def base_orig():
+    """Original basecolor image, loaded only when a texture-based material needs it."""
+    global _orig
+    if _orig is None:
+        _orig = to_img(open(orig_path, 'rb').read())
+    return _orig
+
+
+_orig = None
+transforms = tex_transforms(src_model_path)
 rng = np.random.default_rng(7)
 total_ok = total = 0
 for p_idx, mesh in enumerate(j.get('meshes', [])):
@@ -147,18 +170,27 @@ for p_idx, mesh in enumerate(j.get('meshes', [])):
             print(f"mesh[{p_idx}] prim[{pi}]: no {atlas_key} — left unchanged, skipping")
             continue
         tf_list = transforms.get(mat.get('name', ''), [])
+        tex_tfs = [t for t in tf_list if 'off' in t]
         if len({(json.dumps(t['off']), json.dumps(t['scale']), t['rot'], t['tc'])
-                for t in tf_list}) > 1:
+                for t in tex_tfs}) > 1:
             print(f"mesh[{p_idx}] prim[{pi}]: ambiguous input transforms — using identity")
             tf_list = []
         tf = tf_list[0] if tf_list else None
-        src_tc = tf['tc'] if tf else 0
+        is_factor = bool(tf and 'factor' in tf)
+        src_tc = 0 if is_factor else (tf['tc'] if tf else 0)
         src_key = f'TEXCOORD_{src_tc}'
         if src_key not in attrs:
             print(f"mesh[{p_idx}] prim[{pi}]: no {src_key} for source sampling — skipping")
             continue
         atlas = to_img(image_bytes(j, pbr['baseColorTexture']['index']))
-        orig_arr = to_img(tf['img']) if tf and tf.get('img') else orig
+        if is_factor:
+            orig_arr = factor_image(tf['factor'])
+            bcf = np.array(pbr.get('baseColorFactor', [1, 1, 1, 1]), dtype=float)
+            if max(abs(bcf - 1)) > 1e-6:
+                print(f"mesh[{p_idx}] prim[{pi}]: factor not neutralized on cloned material")
+                sys.exit(1)
+        else:
+            orig_arr = to_img(tf['img']) if tf and tf.get('img') else base_orig()
         pos = read_accessor(j, attrs['POSITION'])
         uv0 = read_accessor(j, attrs[src_key])
         uv1 = read_accessor(j, attrs[atlas_key])
@@ -182,7 +214,8 @@ for p_idx, mesh in enumerate(j.get('meshes', [])):
             ua = w[0] * uv1[a, :2] + w[1] * uv1[b, :2] + w[2] * uv1[c, :2]
             us = w[0] * uv0[a, :2] + w[1] * uv0[b, :2] + w[2] * uv0[c, :2]
             pa = sample_nearest(atlas, ua[0], ua[1])
-            su = apply_transform(us, tf['off'], tf['scale'], tf['rot']) if tf else us
+            su = us if is_factor else (apply_transform(us, tf['off'], tf['scale'], tf['rot'])
+                                       if tf else us)
             ps = sample_nearest(orig_arr, su[0] % 1.0, su[1] % 1.0)
             n_tot += 1
             if np.abs(pa - ps).max() < 40:

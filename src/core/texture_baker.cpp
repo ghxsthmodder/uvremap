@@ -24,6 +24,60 @@ void neutralTexel(TexType t, uint8_t out[4]) {
 
 namespace {
 
+// Factor-baking helpers: a texture-less slot with a non-neutral factor can be
+// painted into the atlas when --bake-factors is set, so the exported material
+// carries appearance in the texture alone.
+double linearToSrgb(double c) {
+    c = std::clamp(c, 0.0, 1.0);
+    return c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1.0 / 2.4) - 0.055;
+}
+
+uint8_t linearToByte(double c) { return uint8_t(std::clamp(linearToSrgb(c), 0.0, 1.0) * 255.0 + 0.5); }
+uint8_t directToByte(double c) { return uint8_t(std::clamp(c, 0.0, 1.0) * 255.0 + 0.5); }
+
+bool nearly(float a, float b) { return std::fabs(a - b) < 1e-4f; }
+
+// Fill value for the slot, or false when the factor is neutral (nothing to bake).
+bool factorTexel(const Material& m, TexType t, uint8_t out[4]) {
+    switch (t) {
+        case TexType::BaseColor: {
+            const V4& f = m.baseColorFactor;
+            if (nearly(f.r, 1) && nearly(f.g, 1) && nearly(f.b, 1) && nearly(f.a, 1)) return false;
+            out[0] = linearToByte(f.r);
+            out[1] = linearToByte(f.g);
+            out[2] = linearToByte(f.b);
+            out[3] = directToByte(f.a);
+            return true;
+        }
+        case TexType::MetallicRoughness: {
+            // glTF spec defaults (1, 1) need no baking.
+            if (nearly(m.metallicFactor, 1) && nearly(m.roughnessFactor, 1)) return false;
+            out[0] = 0;
+            out[1] = directToByte(m.metallicFactor);
+            out[2] = directToByte(m.roughnessFactor);
+            out[3] = 255;
+            return true;
+        }
+        case TexType::Occlusion:
+            // occlusionStrength only modulates an existing occlusion texture;
+            // without one there is nothing to fold, and adding a texture where
+            // the material had none would change shading.
+            return false;
+        case TexType::Emissive: {
+            if (nearly(m.emissiveFactor.x, 0) && nearly(m.emissiveFactor.y, 0) &&
+                nearly(m.emissiveFactor.z, 0))
+                return false;
+            out[0] = linearToByte(m.emissiveFactor.x);
+            out[1] = linearToByte(m.emissiveFactor.y);
+            out[2] = linearToByte(m.emissiveFactor.z);
+            out[3] = 255;
+            return true;
+        }
+        default:
+            return false;  // normal maps have no factor
+    }
+}
+
 // Source UV for a triangle corner, honoring KHR_texture_transform.
 // Spec order: uv' = offset + R(rotation) * (uv * scale) — GLSL in
 // KHR_texture_transform README: matrix = translation * rotation * scale.
@@ -95,23 +149,37 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
             if (std::find(matIds.begin(), matIds.end(), m) == matIds.end()) matIds.push_back(m);
     }
 
-    // Per-material types that any candidate actually has (decodable).
+    // Per-material slot needs: decodable texture, or (with --bake-factors) a
+    // non-neutral factor for a texture-less slot.
     bool typeNeeded[kTexCount];
     std::memset(typeNeeded, 0, sizeof(typeNeeded));
     std::map<int, std::array<bool, kTexCount>> perMatNeed;
+    std::map<int, int> perMatFactorBits;
     for (int mat : matIds) {
         auto& needs = perMatNeed[mat];
         needs.fill(false);
         const Material& m = model.materials[mat];
+        bool warnedDecode = false;
         for (int t = 0; t < kTexCount; t++) {
             const TextureRef& ref = m.tex[t];
-            if (!ref.present) continue;
+            if (!ref.present) {
+                if (opt.bakeFactors) {
+                    uint8_t f[4];
+                    if (factorTexel(m, TexType(t), f)) {
+                        needs[t] = true;
+                        perMatFactorBits[mat] |= factorBit(TexType(t));
+                    }
+                }
+                continue;
+            }
             if (ref.imageIndex < 0 || ref.imageIndex >= int(model.images.size()) ||
                 !model.images[ref.imageIndex].decoded) {
-                if (!typeNeeded[t])
+                if (!typeNeeded[t] && !warnedDecode) {
                     report.warn(std::string("atlas '") + group.name + "': " +
                                 texTypeName(TexType(t)) +
                                 " texture could not be decoded; that slot will not be rebuilt");
+                    warnedDecode = true;
+                }
                 continue;
             }
             needs[t] = true;
@@ -122,16 +190,22 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
     // Rasters: one shared set (material -1) plus per-material sets when any
     // primitive carries multiple candidate materials (variants).
     std::vector<Raster> sharedLayers(kTexCount);
+    bool sharedFactor[kTexCount];
+    std::memset(sharedFactor, 0, sizeof(sharedFactor));
+    for (const auto& fb : perMatFactorBits)
+        for (int t = 0; t < kTexCount; t++)
+            if (fb.second & factorBit(TexType(t))) sharedFactor[t] = true;
     for (int t = 0; t < kTexCount; t++) {
-        if (!typeNeeded[t]) continue;
+        if (!typeNeeded[t] && !sharedFactor[t]) continue;
         sharedLayers[t].resize(texW, texH);
         uint8_t n[4];
         neutralTexel(TexType(t), n);
         sharedLayers[t].fill(n[0], n[1], n[2], n[3]);
     }
-    // Dedicated per-material layers are used only when every variant-candidate
-    // material actually has bakeable textures; otherwise those prims fall back
-    // to the shared layers so undecodable slots keep their original images.
+    // Dedicated per-material layers are used when variant candidates need them,
+    // or when a factor-baked material shares the atlas with other materials
+    // (its flat color must not bleed into theirs). If no material ends up
+    // needing a dedicated layer, factor prims fall back to shared stamping.
     bool perMatUsed = false;
     if (anyMulti) {
         perMatUsed = true;
@@ -146,7 +220,12 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
             }
         }
     }
+        // A factor material may share the plain layers only when no other material
+    // contributes content to them.
+    if (!perMatUsed && perMatFactorBits.size() > 1) perMatUsed = true;
+    if (!perMatUsed && !perMatFactorBits.empty() && matIds.size() > 1) perMatUsed = true;
     std::map<int, std::vector<Raster>> perMatLayers;
+    std::map<int, std::vector<uint8_t>> fillMasks;  // material (or -1) -> texel mask
     if (perMatUsed) {
         for (int mat : matIds) {
             std::vector<Raster>& ls = perMatLayers[mat];
@@ -158,7 +237,11 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                 neutralTexel(TexType(t), n);
                 ls[t].fill(n[0], n[1], n[2], n[3]);
             }
+            if (perMatFactorBits[mat]) fillMasks[mat].assign(size_t(texW) * texH, 0);
         }
+    } else {
+        for (const auto& fb : perMatFactorBits)
+            if (fb.second) fillMasks[-1].assign(size_t(texW) * texH, 0);
     }
 
     int trianglesUnmapped = 0;
@@ -245,6 +328,12 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                 for (int t = 0; t < kTexCount; t++) {
                     target[t] = nullptr;
                     if (!perMatNeed[mat][t]) continue;
+                    if (perMatFactorBits[mat] & factorBit(TexType(t))) {
+                        // Flat factor: covered texels are painted in a final pass.
+                        target[t] = perMatUsed ? &perMatLayers[mat][t] : &sharedLayers[t];
+                        anyActive = true;
+                        continue;
+                    }
                     const TextureRef& ref = m.tex[t];
                     if (ref.imageIndex < 0 || !model.images[ref.imageIndex].decoded) continue;
                     PerType& p = pt[t];
@@ -315,6 +404,54 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
         }
     }
 
+    // Paint the flat factors into the texels of the prims that use each factor
+    // material. Triangle bounding boxes cover the full triangle plus padding.
+    for (auto& mk : fillMasks) {
+        int matKey = mk.first;
+        std::vector<uint8_t>& mask = mk.second;
+        for (const GenMesh& gm : gen.meshes) {
+            const std::vector<int>* cs = nullptr;
+            auto cit = cand.find(gm.primId);
+            if (cit != cand.end()) cs = &cit->second;
+            if (!cs) continue;
+            bool uses = false;
+            if (matKey >= 0)
+                uses = std::find(cs->begin(), cs->end(), matKey) != cs->end();
+            else
+                uses = cs->size() == 1;  // shared mask: single-material prims
+            if (!uses) continue;
+            for (size_t f = 0; f + 2 < gm.indices.size(); f += 3) {
+                const GenVertex& a = gm.vertices[gm.indices[f]];
+                const GenVertex& b = gm.vertices[gm.indices[f + 1]];
+                const GenVertex& c = gm.vertices[gm.indices[f + 2]];
+                if (a.atlasIndex < 0 || b.atlasIndex < 0 || c.atlasIndex < 0) continue;
+                int bx0 = std::max(int(std::floor(std::min({a.u, b.u, c.u}) * scaleX)), 0);
+                int bx1 = std::min(int(std::ceil(std::max({a.u, b.u, c.u}) * scaleX)), texW - 1);
+                int by0 = std::max(int(std::floor(std::min({a.v, b.v, c.v}) * scaleY)), 0);
+                int by1 = std::min(int(std::ceil(std::max({a.v, b.v, c.v}) * scaleY)), texH - 1);
+                for (int y = by0; y <= by1; y++)
+                    std::fill(mask.begin() + size_t(y) * texW + bx0,
+                              mask.begin() + size_t(y) * texW + bx1 + 1, uint8_t(1));
+            }
+        }
+        for (int t = 0; t < kTexCount; t++) {
+            int matForBits = matKey >= 0 ? matKey : perMatFactorBits.begin()->first;
+            if (!(perMatFactorBits[matForBits] & factorBit(TexType(t)))) continue;
+            uint8_t fc[4];
+            if (!factorTexel(model.materials[matForBits], TexType(t), fc)) continue;
+            Raster& ls = matKey >= 0 ? perMatLayers[matKey][t] : sharedLayers[t];
+            if (ls.rgba.empty()) continue;
+            for (size_t i = 0; i < mask.size(); i++) {
+                if (!mask[i]) continue;
+                uint8_t* d = ls.rgba.data() + i * 4;
+                d[0] = fc[0];
+                d[1] = fc[1];
+                d[2] = fc[2];
+                d[3] = fc[3];
+            }
+        }
+    }
+
     if (trianglesUnmapped > 0)
         report.warn("atlas '" + group.name + "': " + std::to_string(trianglesUnmapped) +
                     " triangle(s) could not be mapped back to source geometry; those texels "
@@ -336,20 +473,26 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                 out.name = group.name + "_" + texTypeName(TexType(t)) + "_mat" +
                            std::to_string(mat);
                 imageFromRaster(ls[t], out);
-                outBaked.push_back(BakedImage{mat, TexType(t), std::move(out)});
+                outBaked.push_back(
+                    BakedImage{mat, TexType(t), std::move(out), perMatFactorBits[mat]});
             }
         }
     }
     for (int t = 0; t < kTexCount; t++) {
-        if (!typeNeeded[t] || sharedLayers[t].rgba.empty()) continue;
+        if (sharedLayers[t].rgba.empty()) continue;
+        bool neededShared = typeNeeded[t] || sharedFactor[t];
+        if (!neededShared) continue;
         if (perMatUsed &&
             std::any_of(outBaked.begin(), outBaked.end(),
                         [&](const BakedImage& b) { return b.type == TexType(t); }))
             continue;  // dedicated copies cover every region using this type
+        int bits = 0;
+        for (const auto& fb : perMatFactorBits)
+            if (fb.second & factorBit(TexType(t))) bits |= factorBit(TexType(t));
         Image out;
         out.name = group.name + "_" + texTypeName(TexType(t));
         imageFromRaster(sharedLayers[t], out);
-        outBaked.push_back(BakedImage{-1, TexType(t), std::move(out)});
+        outBaked.push_back(BakedImage{-1, TexType(t), std::move(out), bits});
     }
     return true;
 }

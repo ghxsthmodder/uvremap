@@ -898,22 +898,30 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
         const AtlasOutput& ao = atlases[ai];
         // Baked textures: per (material, type) with a (shared, type) fallback.
         std::map<std::pair<int, int>, int> texByMatType;  // (material|-1, TexType) -> texture
+        std::map<std::pair<int, int>, int> bitsByMatType;  // factor-baked bits
         for (const BakedImage& bi : ao.baked) {
             int texIdx = addBakedImage(ao, bi);
             if (texIdx < 0) return false;
             texByMatType[{bi.material, int(bi.type)}] = texIdx;
+            bitsByMatType[{bi.material, int(bi.type)}] = bi.factorBaked;
             report.stats.textureMapsBaked++;
         }
         for (int oldMat : ao.materialIds) {
             auto key = std::make_pair(int(ai), oldMat);
             if (clonedMats.count(key)) continue;
             tinygltf::Material m2 = tg.materials[oldMat];
+            int bakedFactors = 0;
             auto setSlot = [&](TexType t, auto& slotRef) {
-                if (!core.materials[oldMat].tex[int(t)].present) return;
-                if (!textureBakeable(core, oldMat, t)) return;  // keep original slot as-is
+                const TextureRef& coreRef = core.materials[oldMat].tex[int(t)];
+                bool factorOnly = !coreRef.present;
+                if (!factorOnly && !textureBakeable(core, oldMat, t)) return;  // keep slot as-is
                 auto it = texByMatType.find({oldMat, int(t)});
                 if (it == texByMatType.end()) it = texByMatType.find({-1, int(t)});
                 if (it == texByMatType.end()) return;
+                auto bit = bitsByMatType.find(it->first);
+                if (factorOnly && !(bit->second & factorBit(t)))
+                    return;  // no texture here and the factor was not painted in
+                if (factorOnly) bakedFactors |= factorBit(t);
                 slotRef.index = it->second;
                 slotRef.texCoord = opt.targetUv;
                 slotRef.extensions.erase("KHR_texture_transform");
@@ -923,6 +931,18 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
             setSlot(TexType::Occlusion, m2.occlusionTexture);
             setSlot(TexType::Emissive, m2.emissiveTexture);
             setSlot(TexType::Normal, m2.normalTexture);
+            // Neutralize factors that were painted into the baked image.
+            if (bakedFactors & factorBit(TexType::BaseColor))
+                m2.pbrMetallicRoughness.baseColorFactor = {1.0, 1.0, 1.0, 1.0};
+            if (bakedFactors & factorBit(TexType::MetallicRoughness)) {
+                m2.pbrMetallicRoughness.metallicFactor = 1.0;
+                m2.pbrMetallicRoughness.roughnessFactor = 1.0;
+            }
+            if (bakedFactors & factorBit(TexType::Occlusion)) {
+                m2.occlusionTexture.strength = 1.0;
+                if (m2.occlusionTexture.index < 0) m2.occlusionTexture.index = 0;
+            }
+            if (bakedFactors & factorBit(TexType::Emissive)) m2.emissiveFactor = {0.0, 0.0, 0.0};
             tg.materials.push_back(m2);
             clonedMats[key] = int(tg.materials.size()) - 1;
         }

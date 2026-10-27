@@ -133,6 +133,60 @@ expect "external + glb rejected" 2 \
 expect "invalid --textures value" 2 \
     "$BIN" regenerate "$BBI" -o "$WORK/texbogus" --atlas-mode material --textures bogus
 
+# --bake-factors on a synthetic texture-less model (M1.4): factors fold into
+# rebuilt textures and the cloned materials end up factor-neutral.
+FACT="$WORK/factor/factor_model.gltf"
+mkdir -p "$(dirname "$FACT")"
+if python3 "$ROOT/scripts/verify/make_factor_model.py" "$FACT" > /dev/null 2>&1; then
+    ok "factor model generated"
+else
+    bad "factor model generation failed"
+fi
+expect "factors kept by default (material)" 0 \
+    "$BIN" regenerate "$FACT" -o "$WORK/factor-off" --atlas-mode material --quiet
+if grep -q '"baseColorTexture"' "$WORK/factor-off/factor_model.gltf"; then
+    bad "factors kept by default: texture appeared"
+else
+    ok "factors kept by default: no textures added"
+fi
+expect "bake-factors (material)" 0 \
+    "$BIN" regenerate "$FACT" -o "$WORK/factor-mat" --atlas-mode material --bake-factors \
+        --texture-filter nearest --target-uv 1 --quiet
+expect "bake-factors (scene)" 0 \
+    "$BIN" regenerate "$FACT" -o "$WORK/factor-scene" --atlas-mode scene --bake-factors \
+        --texture-filter nearest --target-uv 1 --quiet
+for variant in mat scene; do
+    FO="$WORK/factor-$variant/factor_model.gltf"
+    if [ -f "$FO" ] && python3 - "$FO" <<'EOF'
+import json, sys
+j = json.load(open(sys.argv[1]))
+mats = j['materials']
+n = len([m for m in mats if m['pbrMetallicRoughness'].get('baseColorTexture')])
+assert n >= 2, f'only {n} cloned materials have baseColorTexture'
+for m in mats:
+    pbr = m['pbrMetallicRoughness']
+    if pbr.get('baseColorTexture'):
+        f = pbr.get('baseColorFactor', [1, 1, 1, 1])
+        assert all(abs(x - 1) < 1e-6 for x in f), f'factor not neutralized: {f}'
+        assert pbr.get('metallicFactor', 1.0) == 1.0, 'metallic not neutralized'
+        assert pbr.get('roughnessFactor', 1.0) == 1.0, 'roughness not neutralized'
+        ef = m.get('emissiveFactor', [0, 0, 0])
+        assert all(v == 0.0 for v in ef), 'emissive not neutralized'
+print('ok')
+EOF
+    then
+        ok "bake-factors ($variant): textures + neutral factors"
+    else
+        bad "bake-factors ($variant): textures + neutral factors"
+    fi
+    if [ -f "$FO" ] && python3 "$ROOT/scripts/verify/check_bake.py" "$FO" \
+            "$WORK/factor/factor_model_baseColor_unused.png" "$FACT" >/dev/null 2>&1; then
+        ok "bake-factors ($variant): painted colors match factors"
+    else
+        bad "bake-factors ($variant): painted colors match factors"
+    fi
+done
+
 echo
 echo "verify: $PASS passed, $FAIL failed"
 rm -rf "$WORK"

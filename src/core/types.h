@@ -28,6 +28,9 @@ enum class TexType : int {
 
 inline constexpr int kTexCount = static_cast<int>(TexType::Count);
 
+// Bit marking that a material's numeric factor for this slot was baked.
+constexpr int factorBit(TexType t) { return 1 << (kTexCount + static_cast<int>(t)); }
+
 const char* texTypeName(TexType t);         // "basecolor", "normal", ...
 const char* texTypeGltfSlot(TexType t);     // "baseColorTexture", ...
 
@@ -51,7 +54,7 @@ struct Material {
     TextureRef tex[kTexCount];
     V4 baseColorFactor{1, 1, 1, 1};
     V3 emissiveFactor{0, 0, 0};
-    float metallicFactor = 0.f;
+    float metallicFactor = 1.f;
     float roughnessFactor = 1.f;
     float occlusionStrength = 1.f;
     std::string alphaMode = "OPAQUE";
@@ -128,10 +131,15 @@ struct RemeshedPrimitive {
 // Baked texture for one (material, type) pair within an atlas. material is -1
 // only when the atlas has exactly one material and per-material copies are
 // unnecessary; the baker emits -1 (shared) in that case to avoid duplication.
+// factorBaked has bit kTexCount+slot set when the material's numeric factor for
+// that slot (baseColorFactor, metallicRoughnessFactor, occlusionStrength,
+// emissiveFactor) was painted into the image instead of sampled from a texture;
+// the exporter must then neutralize that factor on the cloned material.
 struct BakedImage {
     int material = -1;
     TexType type = TexType::BaseColor;
     Image image;
+    int factorBaked = 0;
 };
 
 // Output of one atlas group.

@@ -18,6 +18,7 @@ struct RegenOptions {
     int sourceUv = 0;
     int targetUv = 0;
     Filter filter = Filter::Linear;
+    bool bakeFactors = false;      // fold material factors into texture-less slots
     int textureW = 0, textureH = 0;
     bool binary = true;            // glb default unless --format gltf
     bool embedTextures = false;    // gltf: base64 data URIs instead of files

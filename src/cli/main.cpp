@@ -33,6 +33,7 @@ struct Args {
     float texelsPerUnit = 0.f;
     int sourceUv = 0, targetUv = 0;
     bool dryRun = false, force = false, verbose = false, quiet = false;
+    bool bakeFactors = false;
     bool hasUvSet = false;
     std::string error;
 };
@@ -79,6 +80,11 @@ regenerate/preview options:
       --source-uv INDEX        source TEXCOORD set (default 0)
       --target-uv INDEX        target TEXCOORD set (default 0)
       --texture-filter MODE    nearest | linear (default linear)
+      --bake-factors           fold material factors (baseColorFactor,
+                               metallicRoughnessFactor, emissiveFactor,
+                               occlusionStrength) into rebuilt textures for
+                               slots that have no image; the neutralized
+                               factor then lives in the texture only
       --texture-size WxH       resolution of rebuilt textures
       --format FORMAT          gltf | glb
       --textures MODE          external | embedded (gltf only; default external,
@@ -156,6 +162,8 @@ int parseArgs(int argc, char** argv, Args& a) {
         } else if (s == "--texture-filter") {
             if (!next(i, v)) return 2;
             a.filterStr = v;
+        } else if (s == "--bake-factors") {
+            a.bakeFactors = true;
         } else if (s == "--format") {
             if (!next(i, v)) return 2;
             a.format = v;
@@ -387,6 +395,7 @@ int cmdRegenerate(const Args& a) {
         return 2;
     }
     o.filter = a.filterStr == "nearest" ? Filter::Nearest : Filter::Linear;
+    o.bakeFactors = a.bakeFactors;
     if (!a.format.empty()) {
         if (a.format == "glb") o.binary = true;
         else if (a.format == "gltf") o.binary = false;

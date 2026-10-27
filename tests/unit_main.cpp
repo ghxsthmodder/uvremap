@@ -367,6 +367,83 @@ static void testMaterialsVariantsBake() {
     CHECK(copies[1] == 1);
 }
 
+static void testBakeFactors() {
+    // Two texture-less materials (red / green + occlusion strength): without
+    // --bake-factors nothing is emitted; with it, each material gets its own
+    // painted copy flagged via factorBaked bits.
+    Model model = makeQuadModel();
+    model.materials.clear();
+    for (int mat = 0; mat < 2; mat++) {
+        Material m;
+        m.name = "m" + std::to_string(mat);
+        if (mat == 0) {
+            m.baseColorFactor = {0.8f, 0.05f, 0.05f, 1.f};
+        } else {
+            m.baseColorFactor = {0.05f, 0.8f, 0.05f, 1.f};
+            m.occlusionStrength = 0.5f;
+            m.metallicFactor = 0.25f;
+            m.roughnessFactor = 0.4f;
+            m.emissiveFactor = {0.f, 0.2f, 0.f};
+        }
+        model.materials.push_back(m);
+    }
+    model.primitives[0].material = 0;
+    model.variantNames = {"a", "b"};
+    model.primitives[0].variantMappings = {{0, {0}}, {1, {1}}};
+
+    AtlasGroup group;
+    group.id = 0;
+    group.name = "t";
+    group.primitives = {0};
+    group.materials = {0, 1};
+
+    Report rep;
+    std::string err;
+    GenOptions go;
+    go.resolutionW = go.resolutionH = 64;
+    go.padding = 1;
+    AtlasGen gen;
+    CHECK(generateAtlas(model, group, 0, go, gen, rep, err));
+
+    BakeOptions bo;
+    bo.filter = Filter::Nearest;
+    std::vector<BakedImage> none;
+    CHECK(bakeGroup(model, group, gen, bo, none, rep, err));
+    CHECK(none.empty());
+
+    bo.bakeFactors = true;
+    std::vector<BakedImage> baked;
+    CHECK(bakeGroup(model, group, gen, bo, baked, rep, err));
+
+    int basecolorCopies = 0, occlCopies = 0;
+    for (const BakedImage& b : baked) {
+        if (b.type == TexType::BaseColor) {
+            basecolorCopies++;
+            CHECK(b.material >= 0);
+            CHECK(b.factorBaked & factorBit(TexType::BaseColor));
+            int hits = 0;
+            for (size_t i = 0; i + 3 < b.image.rgba.size(); i += 4) {
+                if (b.image.rgba[i + 3] == 0) continue;
+                bool m0 = b.image.rgba[i] > 180 && b.image.rgba[i + 1] < 70;
+                bool m1 = b.image.rgba[i + 1] > 180 && b.image.rgba[i] < 70;
+                if ((b.material == 0 && m0) || (b.material == 1 && m1)) hits++;
+            }
+            CHECK(hits > 0);
+        }
+        if (b.type == TexType::Occlusion) {
+            occlCopies++;
+        }
+    }
+    CHECK(basecolorCopies == 2);
+    // occlusion strength is not folded when no occlusion texture exists
+    CHECK(occlCopies == 0);
+    // metallicRoughness folds only the material with non-default factors
+    int mrCopies = 0;
+    for (const BakedImage& b : baked)
+        if (b.type == TexType::MetallicRoughness) mrCopies++;
+    CHECK(mrCopies == 1);
+}
+
 int main() {
     testNormalIdentity();
     testNormalFlatRotation();
@@ -377,6 +454,7 @@ int main() {
     testColocalTwinRegression();
     testTextureTransformRotation();
     testMaterialsVariantsBake();
+    testBakeFactors();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

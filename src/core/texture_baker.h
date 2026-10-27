@@ -16,6 +16,7 @@ struct BakeOptions {
     Filter filter = Filter::Linear;
     int textureW = 0, textureH = 0;  // 0 = use atlas size
     int sourceUv = 0;                // fallback UV set when a texture's texCoord is missing
+    bool bakeFactors = false;        // fold material factors into texture-less slots
 };
 
 // Bakes every present texture type of the group's materials into atlas-sized
