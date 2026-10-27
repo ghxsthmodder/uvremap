@@ -368,6 +368,24 @@ struct GltfDocument::Impl {
             }
         }
 
+        // KHR_materials_variants: root variant names.
+        if (const tinygltf::Value* rv =
+                findExt(tg.extensions, "KHR_materials_variants")) {
+            if (rv->IsObject() && rv->Has("variants")) {
+                const tinygltf::Value& va = rv->Get("variants");
+                if (va.IsArray()) {
+                    for (size_t i = 0; i < va.ArrayLen(); i++) {
+                        const tinygltf::Value& vv = va.Get(i);
+                        std::string name;
+                        if (vv.IsObject() && vv.Has("name") && vv.Get("name").IsString())
+                            name = vv.Get("name").Get<std::string>();
+                        if (name.empty()) name = "variant_" + std::to_string(i);
+                        out.variantNames.push_back(name);
+                    }
+                }
+            }
+        }
+
         // Images: read raw bytes + decode with stb.
         out.images.resize(tg.images.size());
         for (size_t i = 0; i < tg.images.size(); i++) {
@@ -460,6 +478,36 @@ struct GltfDocument::Impl {
                         }
                     }
                     if (compressed) continue;
+                }
+                // KHR_materials_variants mappings for this primitive.
+                if (const tinygltf::Value* mv =
+                        findExt(tp.extensions, "KHR_materials_variants")) {
+                    if (mv->IsObject() && mv->Has("mappings")) {
+                        const tinygltf::Value& ma = mv->Get("mappings");
+                        if (ma.IsArray()) {
+                            for (size_t k = 0; k < ma.ArrayLen(); k++) {
+                                const tinygltf::Value& mo = ma.Get(k);
+                                if (!mo.IsObject() || !mo.Has("material")) continue;
+                                const tinygltf::Value& mm = mo.Get("material");
+                                if (!mm.IsInt()) continue;
+                                VariantMapping vm;
+                                vm.material = mm.GetNumberAsInt();
+                                if (vm.material < 0 ||
+                                    vm.material >= int(tg.materials.size()))
+                                    continue;
+                                if (mo.Has("variants") && mo.Get("variants").IsArray()) {
+                                    const tinygltf::Value& vi = mo.Get("variants");
+                                    for (size_t q = 0; q < vi.ArrayLen(); q++) {
+                                        if (!vi.Get(q).IsInt()) continue;
+                                        int v = vi.Get(q).GetNumberAsInt();
+                                        if (v >= 0 && v < int(out.variantNames.size()))
+                                            vm.variants.push_back(v);
+                                    }
+                                }
+                                p.variantMappings.push_back(std::move(vm));
+                            }
+                        }
+                    }
                 }
 
                 std::vector<float> pos, nrm, tan, col;
@@ -790,9 +838,11 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
                 primAtlas[rp.primId] = int(a);
 
     // New images/textures bookkeeping.
-    auto addBakedImage = [&](const AtlasOutput& ao, TexType type, const Image& img) -> int {
+    auto addBakedImage = [&](const AtlasOutput& ao, const BakedImage& bi) -> int {
         // Returns texture index for this baked image.
-        std::string base = ao.name + "_" + texTypeName(type);
+        std::string base = ao.name + "_" + texTypeName(bi.type);
+        if (bi.material >= 0) base += "_mat" + std::to_string(bi.material);
+        const Image& img = bi.image;
         int imageIdx = -1;
         Raster r;
         r.w = img.w;
@@ -846,12 +896,12 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
     std::map<std::pair<int, int>, int> clonedMats;
     for (size_t ai = 0; ai < atlases.size(); ai++) {
         const AtlasOutput& ao = atlases[ai];
-        // Baked textures per type.
-        std::map<int, int> texByType;  // TexType -> texture idx
-        for (const auto& kv : ao.baked) {
-            int texIdx = addBakedImage(ao, kv.first, kv.second);
+        // Baked textures: per (material, type) with a (shared, type) fallback.
+        std::map<std::pair<int, int>, int> texByMatType;  // (material|-1, TexType) -> texture
+        for (const BakedImage& bi : ao.baked) {
+            int texIdx = addBakedImage(ao, bi);
             if (texIdx < 0) return false;
-            texByType[int(kv.first)] = texIdx;
+            texByMatType[{bi.material, int(bi.type)}] = texIdx;
             report.stats.textureMapsBaked++;
         }
         for (int oldMat : ao.materialIds) {
@@ -861,8 +911,9 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
             auto setSlot = [&](TexType t, auto& slotRef) {
                 if (!core.materials[oldMat].tex[int(t)].present) return;
                 if (!textureBakeable(core, oldMat, t)) return;  // keep original slot as-is
-                auto it = texByType.find(int(t));
-                if (it == texByType.end()) return;
+                auto it = texByMatType.find({oldMat, int(t)});
+                if (it == texByMatType.end()) it = texByMatType.find({-1, int(t)});
+                if (it == texByMatType.end()) return;
                 slotRef.index = it->second;
                 slotRef.texCoord = opt.targetUv;
                 slotRef.extensions.erase("KHR_texture_transform");
@@ -977,6 +1028,24 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
             if (cp.material >= 0) {
                 auto it = clonedMats.find({int(ai), cp.material});
                 if (it != clonedMats.end()) tp.material = it->second;
+            }
+            // KHR_materials_variants: point mappings at the cloned materials.
+            if (!cp.variantMappings.empty()) {
+                tinygltf::Value::Array mappings;
+                for (const VariantMapping& vm : cp.variantMappings) {
+                    int newMat = vm.material;
+                    auto it = clonedMats.find({int(ai), vm.material});
+                    if (it != clonedMats.end()) newMat = it->second;
+                    tinygltf::Value::Object mo;
+                    mo["material"] = tinygltf::Value(newMat);
+                    tinygltf::Value::Array varArr;
+                    for (int v : vm.variants) varArr.push_back(tinygltf::Value(v));
+                    mo["variants"] = tinygltf::Value(std::move(varArr));
+                    mappings.push_back(tinygltf::Value(std::move(mo)));
+                }
+                tinygltf::Value::Object ext;
+                ext["mappings"] = tinygltf::Value(std::move(mappings));
+                tp.extensions["KHR_materials_variants"] = tinygltf::Value(std::move(ext));
             }
         }
     }

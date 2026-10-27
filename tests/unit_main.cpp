@@ -163,12 +163,13 @@ static void testColocalTwinRegression() {
 
     BakeOptions bo;
     bo.filter = Filter::Nearest;
-    std::vector<std::pair<TexType, Image>> baked;
+    std::vector<BakedImage> baked;
     CHECK(bakeGroup(model, group, gen, bo, baked, rep, err));
     bool sawBaseColor = false;
-    for (auto& [t, imgOut] : baked) {
-        if (t != TexType::BaseColor) continue;
+    for (const BakedImage& b : baked) {
+        if (b.type != TexType::BaseColor) continue;
         sawBaseColor = true;
+        const Image& imgOut = b.image;
         int red = 0;
         for (size_t i = 0; i + 3 < imgOut.rgba.size(); i += 4)
             if (imgOut.rgba[i] > 200 && imgOut.rgba[i + 1] < 60 && imgOut.rgba[i + 2] < 60)
@@ -243,7 +244,7 @@ static void testTextureTransformRotation() {
     go.resolutionW = go.resolutionH = 64;
     go.padding = 1;
 
-    auto bake = [&](bool withTransform, std::vector<std::pair<TexType, Image>>& out) {
+    auto bake = [&](bool withTransform, std::vector<BakedImage>& out) {
         TexTransform& xform = model.materials[0].tex[int(TexType::BaseColor)].transform;
         model.materials[0].tex[int(TexType::BaseColor)].hasTransform = withTransform;
         xform.offsetU = 0.0;
@@ -264,22 +265,23 @@ static void testTextureTransformRotation() {
         }
     };
 
-    std::vector<std::pair<TexType, Image>> plain, rotated;
+    std::vector<BakedImage> plain, rotated;
     bake(false, plain);
     bake(true, rotated);
 
-    auto colorStats = [](const std::vector<std::pair<TexType, Image>>& baked, int counts[4]) {
+    auto colorStats = [](const std::vector<BakedImage>& baked, int counts[4]) {
         counts[0] = counts[1] = counts[2] = counts[3] = 0;  // red green blue white
         int total = 0;
-        for (auto& [t, im] : baked) {
-            if (t != TexType::BaseColor) continue;
+        for (const BakedImage& b : baked) {
+            if (b.type != TexType::BaseColor) continue;
+            const Image& im = b.image;
             for (size_t i = 0; i + 3 < im.rgba.size(); i += 4) {
                 if (im.rgba[i + 3] == 0) continue;  // neutral fill
-                int r = im.rgba[i], g = im.rgba[i + 1], b = im.rgba[i + 2];
-                if (r > 180 && g < 80 && b < 80) counts[0]++;
-                else if (g > 180 && r < 80 && b < 80) counts[1]++;
-                else if (b > 180 && r < 80 && g < 80) counts[2]++;
-                else if (r > 180 && g > 180 && b > 180) counts[3]++;
+                int r = im.rgba[i], g = im.rgba[i + 1], b2 = im.rgba[i + 2];
+                if (r > 180 && g < 80 && b2 < 80) counts[0]++;
+                else if (g > 180 && r < 80 && b2 < 80) counts[1]++;
+                else if (b2 > 180 && r < 80 && g < 80) counts[2]++;
+                else if (r > 180 && g > 180 && b2 > 180) counts[3]++;
                 total++;
             }
         }
@@ -297,6 +299,74 @@ static void testTextureTransformRotation() {
     CHECK(rotCounts[1] * 10 >= rotTotal * 9);
 }
 
+static void testMaterialsVariantsBake() {
+    // One quad prim, two variant materials (red / green) over the same region:
+    // the baker must emit one dedicated BaseColor copy per material.
+    Model model = makeQuadModel();
+    model.variantNames = {"A", "B"};
+    for (int mat = 0; mat < 2; mat++) {
+        Image img;
+        img.name = mat == 0 ? "red" : "green";
+        img.w = img.h = 4;
+        img.decoded = true;
+        img.rgba.assign(4 * 4 * 4, 0);
+        for (int i = 0; i < 4 * 4; i++) {
+            img.rgba[i * 4 + mat] = 255;
+            img.rgba[i * 4 + 3] = 255;
+        }
+        model.images.push_back(std::move(img));
+        Material m;
+        m.name = "m" + std::to_string(mat);
+        m.tex[int(TexType::BaseColor)].present = true;
+        m.tex[int(TexType::BaseColor)].imageIndex = int(model.images.size()) - 1;
+        m.tex[int(TexType::BaseColor)].texCoord = 0;
+        model.materials.push_back(m);
+    }
+    Primitive& p = model.primitives[0];
+    p.material = 0;
+    p.variantMappings = {{0, {0}}, {1, {1}}};
+
+    AtlasGroup group;
+    group.id = 0;
+    group.name = "t";
+    group.primitives = {0};
+    group.materials = {0, 1};
+
+    Report rep;
+    std::string err;
+    GenOptions go;
+    go.resolutionW = go.resolutionH = 64;
+    go.padding = 1;
+    AtlasGen gen;
+    CHECK(generateAtlas(model, group, 0, go, gen, rep, err));
+    CHECK(gen.unmappedTriangles == 0);
+
+    BakeOptions bo;
+    bo.filter = Filter::Nearest;
+    std::vector<BakedImage> baked;
+    CHECK(bakeGroup(model, group, gen, bo, baked, rep, err));
+
+    int copies[2] = {0, 0};
+    for (const BakedImage& b : baked) {
+        if (b.type != TexType::BaseColor) continue;
+        if (b.material < 0 || b.material > 1) continue;
+        copies[b.material]++;
+        int wanted = b.material;  // green channel for mat 1, red for mat 0
+        int hits = 0, wrong = 0;
+        for (size_t i = 0; i + 3 < b.image.rgba.size(); i += 4) {
+            if (b.image.rgba[i + 3] == 0) continue;
+            if (b.image.rgba[i + wanted] > 200 && b.image.rgba[i + (1 - wanted)] < 60)
+                hits++;
+            else
+                wrong++;
+        }
+        CHECK(hits > 0);
+        CHECK(wrong == 0);
+    }
+    CHECK(copies[0] == 1);
+    CHECK(copies[1] == 1);
+}
+
 int main() {
     testNormalIdentity();
     testNormalFlatRotation();
@@ -306,6 +376,7 @@ int main() {
     testTriangulate();
     testColocalTwinRegression();
     testTextureTransformRotation();
+    testMaterialsVariantsBake();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

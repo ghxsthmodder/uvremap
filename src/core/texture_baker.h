@@ -19,9 +19,10 @@ struct BakeOptions {
 };
 
 // Bakes every present texture type of the group's materials into atlas-sized
-// images. Returns one (TexType, Image) per baked map.
+// images. One BakedImage per (material, type): material -1 is the shared
+// layer used when no primitive needs per-material copies (e.g. KHR_materials_variants).
 bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
-               const BakeOptions& opt, std::vector<std::pair<TexType, Image>>& outBaked,
+               const BakeOptions& opt, std::vector<BakedImage>& outBaked,
                Report& report, std::string& err);
 
 // Neutral fill values for uncovered texels, per texture type.

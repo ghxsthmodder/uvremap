@@ -26,11 +26,14 @@ std::string eligibilityReason(const Model& model, int primIdx, int sourceUv) {
                        " (compressed geometry); decoding is not supported in this version";
         std::string names;
         for (const std::string& e : p.extensionNames) {
+            // KHR_materials_variants is remapped during export, not a blocker.
+            if (e == "KHR_materials_variants") continue;
             if (!names.empty()) names += ", ";
             names += e;
         }
-        return "has primitive extensions (" + names +
-               ") that cannot be safely remapped in this version";
+        if (!names.empty())
+            return "has primitive extensions (" + names +
+                   ") that cannot be safely remapped in this version";
     }
     if (p.indices.empty())
         return "has no triangles";

@@ -53,20 +53,35 @@ std::vector<AtlasGroup> buildGroups(const Model& model, AtlasMode mode, int sour
         return g.id;
     };
 
-    std::map<int, int> byMaterial, byMesh;  // key -> group id
+    std::map<std::set<int>, int> byMatSet;  // material-mode: candidate set -> group
+    std::map<int, int> byMesh;              // mesh mode: mesh index -> group
     int sceneGroup = -1;
+
+    // Materials a primitive can render with (authored + variant mappings).
+    auto candidateMats = [](const Primitive& p) {
+        std::set<int> s;
+        s.insert(p.material);
+        for (const VariantMapping& vm : p.variantMappings) s.insert(vm.material);
+        return s;
+    };
 
     for (int pid : eligible) {
         const Primitive& p = model.primitives[pid];
         int gid = -1;
         switch (mode) {
             case AtlasMode::Material: {
-                auto it = byMaterial.find(p.material);
-                if (it == byMaterial.end()) {
+                std::set<int> mats = candidateMats(p);
+                auto it = byMatSet.find(mats);
+                if (it == byMatSet.end()) {
+                    int firstMat = -1;
+                    for (int m : mats)
+                        if (m >= 0) { firstMat = m; break; }
                     std::string name = "material_" +
-                        (p.material >= 0 ? std::to_string(p.material) : "none_" + std::to_string(pid));
+                        (firstMat >= 0 ? std::to_string(firstMat)
+                                       : "none_" + std::to_string(pid));
+                    if (mats.size() > 1) name += "_variants";
                     gid = newGroup(name);
-                    byMaterial[p.material] = gid;
+                    byMatSet[mats] = gid;
                 } else {
                     gid = it->second;
                 }
@@ -96,7 +111,10 @@ std::vector<AtlasGroup> buildGroups(const Model& model, AtlasMode mode, int sour
     // Distinct materials per group + warnings about what grouping means.
     for (auto& g : groups) {
         std::set<int> mats;
-        for (int pid : g.primitives) mats.insert(model.primitives[pid].material);
+        for (int pid : g.primitives) {
+            const Primitive& p = model.primitives[pid];
+            for (int m : candidateMats(p)) mats.insert(m);
+        }
         g.materials.assign(mats.begin(), mats.end());
         if (mode != AtlasMode::Material && g.materials.size() > 1) {
             report.info("atlas group '" + g.name + "' merges " +
@@ -104,6 +122,16 @@ std::vector<AtlasGroup> buildGroups(const Model& model, AtlasMode mode, int sour
                         " materials; each material gets its own rebuilt textures "
                         "inside the shared atlas");
         }
+        for (int pid : g.primitives)
+            if (!model.primitives[pid].variantMappings.empty()) {
+                report.info("atlas group '" + g.name + "': prim " +
+                            std::to_string(model.primitives[pid].meshIndex) + "/" +
+                            std::to_string(model.primitives[pid].primIndex) + " carries " +
+                            std::to_string(model.primitives[pid].variantMappings.size()) +
+                            " material variant mapping(s); each mapped material gets a "
+                            "baked copy of the atlas");
+                break;
+            }
     }
     return groups;
 }

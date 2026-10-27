@@ -185,7 +185,7 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
         ao.height = o.textureH > 0 ? o.textureH : gens[gi].height;
         ao.materialIds = groups[gi].materials;
 
-        std::vector<std::pair<TexType, Image>> baked;
+        std::vector<BakedImage> baked;
         if (!bakeGroup(model, groups[gi], gens[gi], bo, baked, rep, err)) {
             progress(4, "Baking textures", false);
             res.code = ExitCode::ProcessingFailure;

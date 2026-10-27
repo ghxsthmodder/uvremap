@@ -60,8 +60,13 @@ struct Material {
     bool unlit = false;
 };
 
-struct SourceVertex {
-    V3 position;
+// KHR_materials_variants: which material applies to which variants on a prim.
+struct VariantMapping {
+    int material = -1;
+    std::vector<int> variants;  // indices into Model::variantNames
+};
+
+struct SourceVertex {    V3 position;
     bool hasNormal = false;
     V3 normal;
     bool hasTangent = false;
@@ -84,6 +89,7 @@ struct Primitive {
     int rawMode = 4;                // glTF primitive mode as authored (4/5/6 seen)
     bool hasMorphTargets = false;
     std::vector<std::string> extensionNames;  // primitive-level extensions (draco etc.)
+    std::vector<VariantMapping> variantMappings;  // KHR_materials_variants
     int jointsComponentType = 5123;  // TINYGLTF UNSIGNED_SHORT default
     std::string meshName;
 };
@@ -106,6 +112,7 @@ struct Model {
     int sceneCount = 0;
     int nodeCount = 0;
     int animationCount = 0;
+    std::vector<std::string> variantNames;  // KHR_materials_variants root list
     std::vector<std::string> loadWarnings;
     std::vector<std::string> extensionsUsed;
 };
@@ -118,13 +125,22 @@ struct RemeshedPrimitive {
     std::vector<uint32_t> indices;
 };
 
+// Baked texture for one (material, type) pair within an atlas. material is -1
+// only when the atlas has exactly one material and per-material copies are
+// unnecessary; the baker emits -1 (shared) in that case to avoid duplication.
+struct BakedImage {
+    int material = -1;
+    TexType type = TexType::BaseColor;
+    Image image;
+};
+
 // Output of one atlas group.
 struct AtlasOutput {
     std::string name;  // used for file naming: material_0, mesh_2, scene_0...
     int width = 0, height = 0;
     std::vector<RemeshedPrimitive> primitives;
     std::vector<int> materialIds;             // original materials represented
-    std::vector<std::pair<TexType, Image>> baked;  // baked images per type
+    std::vector<BakedImage> baked;            // baked images per material+type
 };
 
 }  // namespace uvremap

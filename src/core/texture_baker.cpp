@@ -1,8 +1,11 @@
 #include "core/texture_baker.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cfloat>
+#include <cstring>
+#include <map>
 
 #include "core/normal_math.h"
 
@@ -62,8 +65,7 @@ struct PerType {
 }  // namespace
 
 bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
-               const BakeOptions& opt,
-               std::vector<std::pair<TexType, Image>>& outBaked, Report& report,
+               const BakeOptions& opt, std::vector<BakedImage>& outBaked, Report& report,
                std::string& err) {
     const int texW = opt.textureW > 0 ? opt.textureW : gen.width;
     const int texH = opt.textureH > 0 ? opt.textureH : gen.height;
@@ -74,38 +76,89 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
     const float scaleX = float(texW) / float(gen.width);
     const float scaleY = float(texH) / float(gen.height);
 
+    // Candidate materials per primitive: the authored one plus every material
+    // reachable through KHR_materials_variants mappings.
+    std::map<int, std::vector<int>> cand;
     std::vector<int> matIds;
+    bool anyMulti = false;
     for (int pid : group.primitives) {
-        int mat = model.primitives[pid].material;
-        if (mat < 0) continue;
-        if (std::find(matIds.begin(), matIds.end(), mat) == matIds.end())
-            matIds.push_back(mat);
+        const Primitive& p = model.primitives[pid];
+        std::vector<int>& cs = cand[pid];
+        auto add = [&](int m) {
+            if (m < 0 || m >= int(model.materials.size())) return;
+            if (std::find(cs.begin(), cs.end(), m) == cs.end()) cs.push_back(m);
+        };
+        add(p.material);
+        for (const VariantMapping& vm : p.variantMappings) add(vm.material);
+        if (cs.size() > 1) anyMulti = true;
+        for (int m : cs)
+            if (std::find(matIds.begin(), matIds.end(), m) == matIds.end()) matIds.push_back(m);
     }
 
-    bool needed[kTexCount] = {};
+    // Per-material types that any candidate actually has (decodable).
+    bool typeNeeded[kTexCount];
+    std::memset(typeNeeded, 0, sizeof(typeNeeded));
+    std::map<int, std::array<bool, kTexCount>> perMatNeed;
     for (int mat : matIds) {
+        auto& needs = perMatNeed[mat];
+        needs.fill(false);
         const Material& m = model.materials[mat];
         for (int t = 0; t < kTexCount; t++) {
             const TextureRef& ref = m.tex[t];
             if (!ref.present) continue;
             if (ref.imageIndex < 0 || ref.imageIndex >= int(model.images.size()) ||
                 !model.images[ref.imageIndex].decoded) {
-                if (!needed[t])
-                    report.warn(std::string("atlas '") + group.name + "': " + texTypeName(TexType(t)) +
+                if (!typeNeeded[t])
+                    report.warn(std::string("atlas '") + group.name + "': " +
+                                texTypeName(TexType(t)) +
                                 " texture could not be decoded; that slot will not be rebuilt");
                 continue;
             }
-            needed[t] = true;
+            needs[t] = true;
+            typeNeeded[t] = true;
         }
     }
 
-    std::vector<Raster> layers(kTexCount);
+    // Rasters: one shared set (material -1) plus per-material sets when any
+    // primitive carries multiple candidate materials (variants).
+    std::vector<Raster> sharedLayers(kTexCount);
     for (int t = 0; t < kTexCount; t++) {
-        if (!needed[t]) continue;
-        layers[t].resize(texW, texH);
+        if (!typeNeeded[t]) continue;
+        sharedLayers[t].resize(texW, texH);
         uint8_t n[4];
         neutralTexel(TexType(t), n);
-        layers[t].fill(n[0], n[1], n[2], n[3]);
+        sharedLayers[t].fill(n[0], n[1], n[2], n[3]);
+    }
+    // Dedicated per-material layers are used only when every variant-candidate
+    // material actually has bakeable textures; otherwise those prims fall back
+    // to the shared layers so undecodable slots keep their original images.
+    bool perMatUsed = false;
+    if (anyMulti) {
+        perMatUsed = true;
+        for (int pid : group.primitives) {
+            const std::vector<int>& cs = cand[pid];
+            if (cs.size() <= 1) continue;
+            for (int m : cs) {
+                bool any = false;
+                for (int t = 0; t < kTexCount; t++)
+                    any = any || perMatNeed[m][t];
+                if (!any) perMatUsed = false;
+            }
+        }
+    }
+    std::map<int, std::vector<Raster>> perMatLayers;
+    if (perMatUsed) {
+        for (int mat : matIds) {
+            std::vector<Raster>& ls = perMatLayers[mat];
+            ls.resize(kTexCount);
+            for (int t = 0; t < kTexCount; t++) {
+                if (!perMatNeed[mat][t]) continue;
+                ls[t].resize(texW, texH);
+                uint8_t n[4];
+                neutralTexel(TexType(t), n);
+                ls[t].fill(n[0], n[1], n[2], n[3]);
+            }
+        }
     }
 
     int trianglesUnmapped = 0;
@@ -160,44 +213,17 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                 continue;
             }
 
-            const int mat = prim.material;
-            PerType pt[kTexCount];
-            bool anyActive = false;
-            if (mat >= 0) {
-                const Material& m = model.materials[mat];
-                for (int t = 0; t < kTexCount; t++) {
-                    if (!needed[t]) continue;
-                    const TextureRef& ref = m.tex[t];
-                    if (!ref.present) continue;
-                    if (ref.imageIndex < 0 || !model.images[ref.imageIndex].decoded) continue;
-                    pt[t].image = &model.images[ref.imageIndex];
-                    pt[t].xform = &ref.transform;
-                    int uvSet = ref.texCoord;
-                    if (size_t(uvSet) >= uvSets) uvSet = opt.sourceUv;
-                    if (size_t(uvSet) >= uvSets) continue;  // no coordinates to sample with
-                    pt[t].uvSet = uvSet;
-                    V2 raw[3] = {prim.vertices[st.v0].uvsets[uvSet],
-                                 prim.vertices[st.v1].uvsets[uvSet],
-                                 prim.vertices[st.v2].uvsets[uvSet]};
-                    for (int c = 0; c < 3; c++)
-                        pt[t].su[c] = transformUv(raw[cornerOf[c]], *pt[t].xform);
-                    anyActive = true;
-                }
-            }
-            if (!anyActive) continue;
-
             V3 dpos[3] = {prim.vertices[g0.xref].position, prim.vertices[g1.xref].position,
                           prim.vertices[g2.xref].position};
             V2 duv[3] = {{g0.u, g0.v}, {g1.u, g1.v}, {g2.u, g2.v}};
             TriFrame dstFrame;
             bool haveDstFrame = triangleFrame(dpos, duv, dstFrame);
 
-            if (needed[int(TexType::Normal)] && pt[int(TexType::Normal)].uvSet >= 0) {
-                PerType& pn = pt[int(TexType::Normal)];
-                V3 spos[3] = {prim.vertices[st.v0].position, prim.vertices[st.v1].position,
-                              prim.vertices[st.v2].position};
-                pn.useFrame = triangleFrame(spos, pn.su, pn.srcFrame) && haveDstFrame;
-            }
+            // Stamp this triangle once per candidate material of the primitive.
+            static const std::vector<int> kNoMats;
+            auto csIt = cand.find(gm.primId);
+            const std::vector<int>& candMats =
+                csIt != cand.end() ? csIt->second : kNoMats;
 
             float tv0[2] = {g0.u * scaleX, g0.v * scaleY};
             float tv1[2] = {g1.u * scaleX, g1.v * scaleY};
@@ -211,36 +237,77 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
             maxX = std::min(maxX, texW - 1);
             maxY = std::min(maxY, texH - 1);
 
-            for (int y = minY; y <= maxY; y++) {
-                uint8_t* rowBase[kTexCount];
-                for (int t = 0; t < kTexCount; t++)
-                    rowBase[t] = needed[t] ? layers[t].rgba.data() + size_t(y) * texW * 4 : nullptr;
-                for (int x = minX; x <= maxX; x++) {
-                    float p[2] = {x + 0.5f, y + 0.5f};
-                    float w[3];
-                    if (!barycentric(p, tv0, tv1, tv2, w)) continue;
-                    if (w[0] < -1e-6f || w[1] < -1e-6f || w[2] < -1e-6f) continue;
-                    for (int t = 0; t < kTexCount; t++) {
-                        if (!pt[t].image || pt[t].uvSet < 0) continue;
-                        V2 suv{w[0] * pt[t].su[0].u + w[1] * pt[t].su[1].u + w[2] * pt[t].su[2].u,
-                               w[0] * pt[t].su[0].v + w[1] * pt[t].su[1].v + w[2] * pt[t].su[2].v};
-                        float px[4];
-                        sampleBytes(pt[t].image->w, pt[t].image->h, pt[t].image->rgba.data(),
-                                    suv.u, suv.v, opt.filter, true, px);
-                        uint8_t* dst = rowBase[t] + size_t(x) * 4;
-                        if (t == int(TexType::Normal)) {
-                            if (!pt[t].useFrame) continue;
-                            V3 nts{px[0] * 2.f - 1.f, px[1] * 2.f - 1.f, px[2] * 2.f - 1.f};
-                            V3 n = rebakeNormal(pt[t].srcFrame, dstFrame, nts);
-                            dst[0] = uint8_t(std::clamp(n.x * .5f + .5f, 0.f, 1.f) * 255.f + .5f);
-                            dst[1] = uint8_t(std::clamp(n.y * .5f + .5f, 0.f, 1.f) * 255.f + .5f);
-                            dst[2] = uint8_t(std::clamp(n.z * .5f + .5f, 0.f, 1.f) * 255.f + .5f);
-                            dst[3] = 255;
-                        } else {
-                            dst[0] = uint8_t(std::clamp(px[0], 0.f, 1.f) * 255.f + .5f);
-                            dst[1] = uint8_t(std::clamp(px[1], 0.f, 1.f) * 255.f + .5f);
-                            dst[2] = uint8_t(std::clamp(px[2], 0.f, 1.f) * 255.f + .5f);
-                            dst[3] = uint8_t(std::clamp(px[3], 0.f, 1.f) * 255.f + .5f);
+            for (int mat : candMats) {
+                const Material& m = model.materials[mat];
+                PerType pt[kTexCount];
+                Raster* target[kTexCount];
+                bool anyActive = false;
+                for (int t = 0; t < kTexCount; t++) {
+                    target[t] = nullptr;
+                    if (!perMatNeed[mat][t]) continue;
+                    const TextureRef& ref = m.tex[t];
+                    if (ref.imageIndex < 0 || !model.images[ref.imageIndex].decoded) continue;
+                    PerType& p = pt[t];
+                    p.image = &model.images[ref.imageIndex];
+                    p.xform = &ref.transform;
+                    int uvSet = ref.texCoord;
+                    if (size_t(uvSet) >= uvSets) uvSet = opt.sourceUv;
+                    if (size_t(uvSet) >= uvSets) continue;  // no coordinates to sample with
+                    p.uvSet = uvSet;
+                    V2 raw[3] = {prim.vertices[st.v0].uvsets[uvSet],
+                                 prim.vertices[st.v1].uvsets[uvSet],
+                                 prim.vertices[st.v2].uvsets[uvSet]};
+                    for (int c = 0; c < 3; c++)
+                        p.su[c] = transformUv(raw[cornerOf[c]], *p.xform);
+                    if (t == int(TexType::Normal)) {
+                        V3 spos[3] = {prim.vertices[st.v0].position, prim.vertices[st.v1].position,
+                                      prim.vertices[st.v2].position};
+                        p.useFrame =
+                            triangleFrame(spos, p.su, p.srcFrame) && haveDstFrame;
+                    }
+                    // Shared layer when every prim has one material; per-material
+                    // layer when variants make several materials share regions.
+                    target[t] = perMatUsed ? &perMatLayers[mat][t] : &sharedLayers[t];
+                    anyActive = true;
+                }
+                if (!anyActive) continue;
+
+                for (int y = minY; y <= maxY; y++) {
+                    uint8_t* rowBase[kTexCount];
+                    for (int t = 0; t < kTexCount; t++)
+                        rowBase[t] = target[t] && !target[t]->rgba.empty()
+                                         ? target[t]->rgba.data() + size_t(y) * texW * 4
+                                         : nullptr;
+                    for (int x = minX; x <= maxX; x++) {
+                        float p[2] = {x + 0.5f, y + 0.5f};
+                        float w[3];
+                        if (!barycentric(p, tv0, tv1, tv2, w)) continue;
+                        if (w[0] < -1e-6f || w[1] < -1e-6f || w[2] < -1e-6f) continue;
+                        for (int t = 0; t < kTexCount; t++) {
+                            if (!rowBase[t]) continue;
+                            if (!pt[t].image || pt[t].uvSet < 0) continue;
+                            V2 suv{w[0] * pt[t].su[0].u + w[1] * pt[t].su[1].u +
+                                       w[2] * pt[t].su[2].u,
+                                   w[0] * pt[t].su[0].v + w[1] * pt[t].su[1].v +
+                                       w[2] * pt[t].su[2].v};
+                            float px[4];
+                            sampleBytes(pt[t].image->w, pt[t].image->h, pt[t].image->rgba.data(),
+                                        suv.u, suv.v, opt.filter, true, px);
+                            uint8_t* dst = rowBase[t] + size_t(x) * 4;
+                            if (t == int(TexType::Normal)) {
+                                if (!pt[t].useFrame) continue;
+                                V3 nts{px[0] * 2.f - 1.f, px[1] * 2.f - 1.f, px[2] * 2.f - 1.f};
+                                V3 n = rebakeNormal(pt[t].srcFrame, dstFrame, nts);
+                                dst[0] = uint8_t(std::clamp(n.x * .5f + .5f, 0.f, 1.f) * 255.f + .5f);
+                                dst[1] = uint8_t(std::clamp(n.y * .5f + .5f, 0.f, 1.f) * 255.f + .5f);
+                                dst[2] = uint8_t(std::clamp(n.z * .5f + .5f, 0.f, 1.f) * 255.f + .5f);
+                                dst[3] = 255;
+                            } else {
+                                dst[0] = uint8_t(std::clamp(px[0], 0.f, 1.f) * 255.f + .5f);
+                                dst[1] = uint8_t(std::clamp(px[1], 0.f, 1.f) * 255.f + .5f);
+                                dst[2] = uint8_t(std::clamp(px[2], 0.f, 1.f) * 255.f + .5f);
+                                dst[3] = uint8_t(std::clamp(px[3], 0.f, 1.f) * 255.f + .5f);
+                            }
                         }
                     }
                 }
@@ -260,12 +327,29 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                     " duplicated source triangle(s) (same corners, different UVs possible); "
                     "first occurrence used");
 
+    if (perMatUsed) {
+        for (int mat : matIds) {
+            std::vector<Raster>& ls = perMatLayers[mat];
+            for (int t = 0; t < kTexCount; t++) {
+                if (ls[t].rgba.empty()) continue;
+                Image out;
+                out.name = group.name + "_" + texTypeName(TexType(t)) + "_mat" +
+                           std::to_string(mat);
+                imageFromRaster(ls[t], out);
+                outBaked.push_back(BakedImage{mat, TexType(t), std::move(out)});
+            }
+        }
+    }
     for (int t = 0; t < kTexCount; t++) {
-        if (!needed[t] || layers[t].rgba.empty()) continue;
+        if (!typeNeeded[t] || sharedLayers[t].rgba.empty()) continue;
+        if (perMatUsed &&
+            std::any_of(outBaked.begin(), outBaked.end(),
+                        [&](const BakedImage& b) { return b.type == TexType(t); }))
+            continue;  // dedicated copies cover every region using this type
         Image out;
         out.name = group.name + "_" + texTypeName(TexType(t));
-        imageFromRaster(layers[t], out);
-        outBaked.emplace_back(TexType(t), std::move(out));
+        imageFromRaster(sharedLayers[t], out);
+        outBaked.push_back(BakedImage{-1, TexType(t), std::move(out)});
     }
     return true;
 }

@@ -61,8 +61,23 @@ run_model MetalRough     "$SAMPLES/MetalRoughSpheres/glTF-Binary/MetalRoughSpher
 run_model Orientation    "$SAMPLES/OrientationTest/glTF-Binary/OrientationTest.glb"            4
 run_model NormalTangent  "$SAMPLES/NormalTangentTest/glTF-Binary/NormalTangentTest.glb"        0
 run_model BoxTextured    "$SAMPLES/BoxTextured/glTF-Binary/BoxTextured.glb"                    0
-# Shoe: KHR_materials_variants primitive is left unchanged -> exit 4 (nothing regenerable)
-run_model Shoe           "$SAMPLES/MaterialsVariantsShoe/glTF-Binary/MaterialsVariantsShoe.glb" 4
+# Shoe: KHR_materials_variants remapped since v0.1.5 (M1.2) -> regenerates
+run_model Shoe           "$SAMPLES/MaterialsVariantsShoe/glTF-Binary/MaterialsVariantsShoe.glb" 0
+# variant mappings must survive export pointing at per-variant baked textures
+if python3 "$ROOT/scripts/verify/check_variants.py" \
+        "$WORK/Shoe-material-glb/MaterialsVariantsShoe.glb" >/dev/null 2>&1; then
+    ok "shoe: variant mappings + per-variant textures"
+else
+    bad "shoe: variant mappings + per-variant textures"
+    python3 "$ROOT/scripts/verify/check_variants.py" \
+        "$WORK/Shoe-material-glb/MaterialsVariantsShoe.glb" 2>&1 | tail -3 | sed 's/^/      /'
+fi
+if python3 "$ROOT/scripts/verify/check_variants.py" \
+        "$WORK/Shoe-scene-glb/MaterialsVariantsShoe.glb" >/dev/null 2>&1; then
+    ok "shoe scene: variant mappings + per-variant textures"
+else
+    bad "shoe scene: variant mappings + per-variant textures"
+fi
 # KHR_texture_transform rotation models: rebuilt since v0.1.3 (M1.1)
 run_model TexTransformMulti "$SAMPLES/TextureTransformMultiTest/glTF-Binary/TextureTransformMultiTest.glb" 0
 
