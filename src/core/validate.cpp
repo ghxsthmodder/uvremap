@@ -9,7 +9,6 @@ bool textureBakeable(const Model& model, int matIdx, TexType t) {
     if (matIdx < 0 || matIdx >= int(model.materials.size())) return false;
     const TextureRef& ref = model.materials[matIdx].tex[int(t)];
     if (!ref.present) return false;
-    if (ref.hasTransform && std::fabs(ref.transform.rotation) > 1e-9) return false;
     if (ref.imageIndex < 0 || ref.imageIndex >= int(model.images.size())) return false;
     return model.images[ref.imageIndex].decoded;
 }
@@ -34,17 +33,6 @@ std::string eligibilityReason(const Model& model, int primIdx, int sourceUv) {
     if (sourceUv < 0 || size_t(sourceUv) >= p.vertices[0].uvsets.size())
         return "has no TEXCOORD_" + std::to_string(sourceUv) +
                " set to sample textures from";
-    // Textures that cannot be transferred safely must not be altered.
-    if (p.material >= 0) {
-        const Material& m = model.materials[p.material];
-        for (int t = 0; t < kTexCount; t++) {
-            const TextureRef& ref = m.tex[t];
-            if (ref.present && ref.hasTransform &&
-                std::fabs(ref.transform.rotation) > 1e-9)
-                return std::string("material uses KHR_texture_transform rotation on ") +
-                       texTypeName(TexType(t)) + " (not transferable in this version)";
-        }
-    }
     // Source UVs must have non-zero area somewhere, otherwise nothing can be
     // sampled through them.
     bool anyArea = false;

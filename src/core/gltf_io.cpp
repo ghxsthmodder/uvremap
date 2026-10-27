@@ -212,8 +212,7 @@ const tinygltf::Value* findExt(const tinygltf::ExtensionMap& exts, const std::st
 }
 
 template <typename TI>
-void parseTexTransform(const TI& ti, TextureRef& ref, Report& rep,
-                       const std::string& what) {
+void parseTexTransform(const TI& ti, TextureRef& ref) {
     const tinygltf::Value* t = findExt(ti.extensions, "KHR_texture_transform");
     if (!t) return;
     ref.hasTransform = true;
@@ -238,10 +237,6 @@ void parseTexTransform(const TI& ti, TextureRef& ref, Report& rep,
     if (t->Has("texCoord")) {
         const tinygltf::Value& tc = t->Get("texCoord");
         if (tc.IsNumber()) ref.texCoord = tc.GetNumberAsInt();
-    }
-    if (std::fabs(x.rotation) > 1e-9) {
-        rep.warn(what + ": KHR_texture_transform rotation is not transferable; "
-                       "the primitive will be left unchanged");
     }
 }
 
@@ -292,7 +287,7 @@ void readTextureSlot(const tinygltf::Model& m, const TI& ti,
     ref.texCoord = ti.texCoord;
     const tinygltf::Texture& tex = m.textures[ti.index];
     ref.imageIndex = tex.source;
-    parseTexTransform(ti, ref, rep, what);
+    parseTexTransform(ti, ref);
 }
 
 // tinygltf demands a loader callback; decoding is done by us via stb

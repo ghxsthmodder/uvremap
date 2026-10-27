@@ -63,6 +63,8 @@ run_model NormalTangent  "$SAMPLES/NormalTangentTest/glTF-Binary/NormalTangentTe
 run_model BoxTextured    "$SAMPLES/BoxTextured/glTF-Binary/BoxTextured.glb"                    0
 # Shoe: KHR_materials_variants primitive is left unchanged -> exit 4 (nothing regenerable)
 run_model Shoe           "$SAMPLES/MaterialsVariantsShoe/glTF-Binary/MaterialsVariantsShoe.glb" 4
+# KHR_texture_transform rotation models: rebuilt since v0.1.3 (M1.1)
+run_model TexTransformMulti "$SAMPLES/TextureTransformMultiTest/glTF-Binary/TextureTransformMultiTest.glb" 0
 
 # input immutability: hash all sample inputs before/after is impractical here; check one:
 SRC="$SAMPLES/BoomBox/glTF-Binary/BoomBox.glb"
@@ -77,6 +79,15 @@ H2=$(sha256sum "$SRC" | cut -d' ' -f1)
     && python3 "$ROOT/scripts/verify/check_bake.py" "$WORK/boom-t1/BoomBox.gltf" \
         "$SAMPLES/BoomBox/glTF/BoomBox_baseColor.png" >/dev/null 2>&1 \
     && ok "bake agreement (check_bake.py)" || bad "bake agreement (check_bake.py)"
+
+# KHR_texture_transform (rotation/scale/offset) accuracy on the conformance model:
+# atlas into TEXCOORD_2 so both source sets survive; nearest filter for exact compare.
+TT="$SAMPLES/TextureTransformMultiTest/glTF/TextureTransformMultiTest.gltf"
+"$BIN" regenerate "$TT" -o "$WORK/ttm-t2" --atlas-mode material \
+    --format gltf --target-uv 2 --texture-filter nearest --quiet >/dev/null \
+    && python3 "$ROOT/scripts/verify/check_bake.py" "$WORK/ttm-t2/TextureTransformMultiTest.gltf" \
+        "$SAMPLES/TextureTransformMultiTest/glTF/TestMap.png" "$TT" >/dev/null 2>&1 \
+    && ok "rotation bake agreement (check_bake.py)" || bad "rotation bake agreement (check_bake.py)"
 
 # texture placement option: gltf embedded (data URIs, no textures dir) vs external
 EMB="$WORK/boom-texembed"

@@ -35,7 +35,7 @@ struct TexTransform {
     bool identity = true;
     double offsetU = 0, offsetV = 0;
     double scaleU = 1, scaleV = 1;
-    double rotation = 0;  // radians; non-rotation unsupported for baking
+    double rotation = 0;  // radians, CCW around origin; applied before offset/scale
 };
 
 struct TextureRef {

@@ -178,6 +178,125 @@ static void testColocalTwinRegression() {
     CHECK(sawBaseColor);
 }
 
+static Model makeQuadModel() {
+    Model model;
+    model.inputPath = "synthetic";
+    Primitive p;
+    p.meshIndex = 0;
+    p.primIndex = 0;
+    p.material = 0;
+    const V3 pos[4] = {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}};
+    const V2 uv[4] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+    for (int c = 0; c < 4; c++) {
+        SourceVertex v;
+        v.position = pos[c];
+        v.hasNormal = true;
+        v.normal = {0, 0, 1};
+        v.uvsets.push_back(uv[c]);
+        p.vertices.push_back(v);
+    }
+    p.indices = {0, 1, 2, 0, 2, 3};
+    model.primitives.push_back(std::move(p));
+    return model;
+}
+
+static void testTextureTransformRotation() {
+    // KHR_texture_transform spec example: offset [0,1], scale [.5,.5],
+    // rotation pi/2. Mesh UV [0,1]^2 maps to texture region u'=[.5,1],
+    // v'=[0,.5] (upper-right storage quadrant), so the baked atlas must be
+    // that quadrant's color only.
+    Model model = makeQuadModel();
+
+    Image img;
+    img.name = "quadrants";
+    img.w = 4;
+    img.h = 4;
+    img.decoded = true;
+    img.rgba.assign(4 * 4 * 4, 0);
+    for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 4; x++) {
+            uint8_t* p = &img.rgba[(y * 4 + x) * 4];
+            bool right = x >= 2, top = y < 2;
+            if (top && !right) { p[0] = 255; }            // TL red
+            else if (top && right) { p[1] = 255; }        // TR green
+            else if (!right) { p[2] = 255; }              // BL blue
+            else { p[0] = p[1] = p[2] = 255; }            // BR white
+            p[3] = 255;
+        }
+    Material m;
+    m.name = "m0";
+    m.tex[int(TexType::BaseColor)].present = true;
+    m.tex[int(TexType::BaseColor)].imageIndex = 0;
+    m.tex[int(TexType::BaseColor)].texCoord = 0;
+    m.tex[int(TexType::BaseColor)].hasTransform = true;
+    TexTransform& x = m.tex[int(TexType::BaseColor)].transform;
+    x.identity = false;
+    model.images.push_back(std::move(img));
+    model.materials.push_back(m);
+
+    AtlasGroup group;
+    group.id = 0;
+    group.name = "t";
+    group.primitives = {0};
+    group.materials = {0};
+    GenOptions go;
+    go.resolutionW = go.resolutionH = 64;
+    go.padding = 1;
+
+    auto bake = [&](bool withTransform, std::vector<std::pair<TexType, Image>>& out) {
+        TexTransform& xform = model.materials[0].tex[int(TexType::BaseColor)].transform;
+        model.materials[0].tex[int(TexType::BaseColor)].hasTransform = withTransform;
+        xform.offsetU = 0.0;
+        xform.offsetV = withTransform ? 1.0 : 0.0;
+        xform.scaleU = xform.scaleV = withTransform ? 0.5 : 1.0;
+        xform.rotation = withTransform ? 1.5707963267948966 : 0.0;
+        xform.identity = !withTransform;
+        Report rep;
+        std::string err;
+        AtlasGen gen;
+        CHECK(generateAtlas(model, group, 0, go, gen, rep, err));
+        BakeOptions bo;
+        bo.filter = Filter::Nearest;
+        CHECK(bakeGroup(model, group, gen, bo, out, rep, err));
+        for (const auto& w : rep.warnings()) {
+            CHECK(w.find("could not be mapped") == std::string::npos);
+            CHECK(w.find("rotation") == std::string::npos);
+        }
+    };
+
+    std::vector<std::pair<TexType, Image>> plain, rotated;
+    bake(false, plain);
+    bake(true, rotated);
+
+    auto colorStats = [](const std::vector<std::pair<TexType, Image>>& baked, int counts[4]) {
+        counts[0] = counts[1] = counts[2] = counts[3] = 0;  // red green blue white
+        int total = 0;
+        for (auto& [t, im] : baked) {
+            if (t != TexType::BaseColor) continue;
+            for (size_t i = 0; i + 3 < im.rgba.size(); i += 4) {
+                if (im.rgba[i + 3] == 0) continue;  // neutral fill
+                int r = im.rgba[i], g = im.rgba[i + 1], b = im.rgba[i + 2];
+                if (r > 180 && g < 80 && b < 80) counts[0]++;
+                else if (g > 180 && r < 80 && b < 80) counts[1]++;
+                else if (b > 180 && r < 80 && g < 80) counts[2]++;
+                else if (r > 180 && g > 180 && b > 180) counts[3]++;
+                total++;
+            }
+        }
+        return total;
+    };
+
+    int plainCounts[4], rotCounts[4];
+    int plainTotal = colorStats(plain, plainCounts);
+    int rotTotal = colorStats(rotated, rotCounts);
+    CHECK(plainTotal > 0);
+    // Without transform all four quadrants are sampled.
+    CHECK(plainCounts[0] > 0 && plainCounts[1] > 0 && plainCounts[2] > 0 && plainCounts[3] > 0);
+    // With the spec transform only the TR (green) quadrant is sampled.
+    CHECK(rotTotal > 0);
+    CHECK(rotCounts[1] * 10 >= rotTotal * 9);
+}
+
 int main() {
     testNormalIdentity();
     testNormalFlatRotation();
@@ -186,6 +305,7 @@ int main() {
     testPngRoundTrip();
     testTriangulate();
     testColocalTwinRegression();
+    testTextureTransformRotation();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

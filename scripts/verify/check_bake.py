@@ -6,10 +6,12 @@ source UVs (TEXCOORD_0) and the new atlas UVs (TEXCOORD_1). For random
 points on the remeshed triangles this samples the baked atlas at the atlas
 UV and the original texture at the source UV and checks agreement.
 
-Usage: check_bake.py <output.gltf|output.glb> <original_basecolor.png>
-Exit 0 when >=90% of covered sample points agree.
+Usage: check_bake.py <output.gltf|output.glb> <original_basecolor.png> [input.gltf|input.glb]
+Exit 0 when >=90% of covered sample points agree. When the input model is
+given, its materials' KHR_texture_transform (matched by material name) is
+applied to source UVs before sampling the original texture.
 """
-import base64, io, json, os, struct, sys
+import base64, io, json, math, os, struct, sys
 
 import numpy as np
 from PIL import Image
@@ -18,6 +20,7 @@ if len(sys.argv) < 3:
     print(__doc__);
     sys.exit(2)
 path, orig_path = sys.argv[1], sys.argv[2]
+src_model_path = sys.argv[3] if len(sys.argv) > 3 else None
 
 
 def load_gltf(p):
@@ -37,14 +40,15 @@ j = load_gltf(path)
 BASE = os.path.dirname(os.path.abspath(path))
 
 
-def buffer_bytes(j, i):
+def buffer_bytes(j, i, base=None):
+    base = BASE if base is None else base
     b = j['buffers'][i]
     if 'uri' not in b:
         return j['_bin']
     uri = b['uri']
     if uri.startswith('data:'):
         return base64.b64decode(uri.split(',', 1)[1])
-    with open(os.path.join(BASE, uri), 'rb') as f:
+    with open(os.path.join(base, uri), 'rb') as f:
         return f.read()
 
 
@@ -67,16 +71,17 @@ def read_accessor(j, idx):
     return out
 
 
-def image_bytes(j, i):
+def image_bytes(j, i, base=None):
+    base = BASE if base is None else base
     img = j['images'][i]
     if 'uri' in img:
         uri = img['uri']
         if uri.startswith('data:'):
             return base64.b64decode(uri.split(',', 1)[1])
-        with open(os.path.join(BASE, uri), 'rb') as f:
+        with open(os.path.join(base, uri), 'rb') as f:
             return f.read()
     bv = j['bufferViews'][img['bufferView']]
-    buf = buffer_bytes(j, bv['buffer'])
+    buf = buffer_bytes(j, bv['buffer'], base)
     return buf[bv.get('byteOffset', 0):bv.get('byteOffset', 0) + bv['byteLength']]
 
 
@@ -91,37 +96,84 @@ def sample_nearest(img, u, v):
     return img[y, x]
 
 
+def apply_transform(uv, off, scale, rot):
+    u, v = uv[0] * scale[0], uv[1] * scale[1]
+    if rot:
+        c, s = math.cos(rot), math.sin(rot)
+        u, v = u * c - v * s, u * s + v * c
+    return (u + off[0], v + off[1])
+
+
+def tex_transforms(p):
+    """material name -> list of input baseColorTexture info dicts."""
+    if not p:
+        return {}
+    j2 = load_gltf(p)
+    base2 = os.path.dirname(os.path.abspath(p))
+    img_cache = {}
+    out = {}
+    for m in j2.get('materials', []):
+        bt = (m.get('pbrMetallicRoughness') or {}).get('baseColorTexture')
+        if not bt:
+            continue
+        kt = (bt.get('extensions') or {}).get('KHR_texture_transform', {})
+        src = j2['textures'][bt['index']]['source']
+        if src not in img_cache:
+            img_cache[src] = image_bytes(j2, src, base2)
+        out.setdefault(m.get('name', ''), []).append(dict(
+            off=kt.get('offset', [0.0, 0.0]),
+            scale=kt.get('scale', [1.0, 1.0]),
+            rot=kt.get('rotation', 0.0),
+            tc=kt.get('texCoord', bt.get('texCoord', 0)),
+            img=img_cache[src]))
+    return out
+
+
+transforms = tex_transforms(src_model_path)
+
 orig = to_img(open(orig_path, 'rb').read())
 rng = np.random.default_rng(7)
 total_ok = total = 0
 for p_idx, mesh in enumerate(j.get('meshes', [])):
     for pi, prim in enumerate(mesh['primitives']):
         attrs = prim['attributes']
-        if 'TEXCOORD_1' not in attrs:
-            print(f"mesh[{p_idx}] prim[{pi}]: no TEXCOORD_1 — left unchanged, skipping")
-            continue
         mat = j['materials'][prim['material']] if 'material' in prim else {}
         pbr = mat.get('pbrMetallicRoughness', {})
         if 'baseColorTexture' not in pbr:
             continue
+        atlas_tc = pbr['baseColorTexture'].get('texCoord', 1)
+        atlas_key = f'TEXCOORD_{atlas_tc}'
+        if atlas_key not in attrs:
+            print(f"mesh[{p_idx}] prim[{pi}]: no {atlas_key} — left unchanged, skipping")
+            continue
+        tf_list = transforms.get(mat.get('name', ''), [])
+        if len({(json.dumps(t['off']), json.dumps(t['scale']), t['rot'], t['tc'])
+                for t in tf_list}) > 1:
+            print(f"mesh[{p_idx}] prim[{pi}]: ambiguous input transforms — using identity")
+            tf_list = []
+        tf = tf_list[0] if tf_list else None
+        src_tc = tf['tc'] if tf else 0
+        src_key = f'TEXCOORD_{src_tc}'
+        if src_key not in attrs:
+            print(f"mesh[{p_idx}] prim[{pi}]: no {src_key} for source sampling — skipping")
+            continue
         atlas = to_img(image_bytes(j, pbr['baseColorTexture']['index']))
+        orig_arr = to_img(tf['img']) if tf and tf.get('img') else orig
         pos = read_accessor(j, attrs['POSITION'])
-        uv0 = read_accessor(j, attrs['TEXCOORD_0'])
-        uv1 = read_accessor(j, attrs['TEXCOORD_1'])
+        uv0 = read_accessor(j, attrs[src_key])
+        uv1 = read_accessor(j, attrs[atlas_key])
         if uv1[:, :2].min() < -1e-3 or uv1[:, :2].max() > 1 + 1e-3:
             print(f"mesh[{p_idx}] prim[{pi}]: FAIL atlas UVs outside [0,1]")
             sys.exit(1)
         idx = (read_accessor(j, prim['indices']).astype(int).ravel()
                if 'indices' in prim else np.arange(len(pos)))
         tris = idx.reshape(-1, 3)
-        sel = rng.integers(0, len(tris), size=min(3000, len(tris)))
+        sel = rng.integers(0, len(tris), size=min(3000, max(len(tris), 300)))
         n_ok = n_tot = 0
         for t in sel:
             a, b, c = tris[t]
-            w = rng.random(2)
-            w = np.append(w, 1 - w.sum())
-            if (w < 0).any():
-                continue
+            r = np.sort(rng.random(2))
+            w = np.array([1 - r[1], r[1] - r[0], r[0]])
             d1 = uv1[b, :2] - uv1[a, :2]
             d2 = uv1[c, :2] - uv1[a, :2]
             area_atlas = abs(d1[0] * d2[1] - d2[0] * d1[1]) / 2
@@ -130,7 +182,8 @@ for p_idx, mesh in enumerate(j.get('meshes', [])):
             ua = w[0] * uv1[a, :2] + w[1] * uv1[b, :2] + w[2] * uv1[c, :2]
             us = w[0] * uv0[a, :2] + w[1] * uv0[b, :2] + w[2] * uv0[c, :2]
             pa = sample_nearest(atlas, ua[0], ua[1])
-            ps = sample_nearest(orig, us[0] % 1.0, us[1] % 1.0)
+            su = apply_transform(us, tf['off'], tf['scale'], tf['rot']) if tf else us
+            ps = sample_nearest(orig_arr, su[0] % 1.0, su[1] % 1.0)
             n_tot += 1
             if np.abs(pa - ps).max() < 40:
                 n_ok += 1

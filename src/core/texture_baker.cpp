@@ -21,12 +21,19 @@ void neutralTexel(TexType t, uint8_t out[4]) {
 
 namespace {
 
-// Source UV for a triangle corner, honoring KHR_texture_transform (offset and
-// scale only; rotation is rejected before baking).
+// Source UV for a triangle corner, honoring KHR_texture_transform.
+// Spec order: uv' = offset + R(rotation) * (uv * scale) — GLSL in
+// KHR_texture_transform README: matrix = translation * rotation * scale.
 V2 transformUv(V2 uv, const TexTransform& x) {
     if (x.identity) return uv;
-    return V2{uv.u * float(x.scaleU) + float(x.offsetU),
-              uv.v * float(x.scaleV) + float(x.offsetV)};
+    double u = uv.u * x.scaleU, v = uv.v * x.scaleV;
+    if (x.rotation != 0.0) {
+        double c = std::cos(x.rotation), s = std::sin(x.rotation);
+        double ru = u * c - v * s, rv = u * s + v * c;
+        u = ru;
+        v = rv;
+    }
+    return V2{float(u + x.offsetU), float(v + x.offsetV)};
 }
 
 bool barycentric(const float p[2], const float v0[2], const float v1[2], const float v2[2],
@@ -81,7 +88,6 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
         for (int t = 0; t < kTexCount; t++) {
             const TextureRef& ref = m.tex[t];
             if (!ref.present) continue;
-            if (ref.hasTransform && std::fabs(ref.transform.rotation) > 1e-9) continue;
             if (ref.imageIndex < 0 || ref.imageIndex >= int(model.images.size()) ||
                 !model.images[ref.imageIndex].decoded) {
                 if (!needed[t])
@@ -163,7 +169,6 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                     if (!needed[t]) continue;
                     const TextureRef& ref = m.tex[t];
                     if (!ref.present) continue;
-                    if (ref.hasTransform && std::fabs(ref.transform.rotation) > 1e-9) continue;
                     if (ref.imageIndex < 0 || !model.images[ref.imageIndex].decoded) continue;
                     pt[t].image = &model.images[ref.imageIndex];
                     pt[t].xform = &ref.transform;
