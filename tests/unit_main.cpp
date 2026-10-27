@@ -523,6 +523,47 @@ static void testMultiPageAtlas() {
     }
 }
 
+static void testNonSquareAtlas() {
+    // xatlas packs square; the runner rescales chart pixels to the requested
+    // W x H so width/height (and everything derived from them) are non-square.
+    Model model = makeQuadModel();
+    AtlasGroup group;
+    group.id = 0;
+    group.name = "t";
+    group.primitives = {0};
+    group.materials = {0};
+    GenOptions go;
+    go.resolutionW = 64;
+    go.resolutionH = 16;
+    go.padding = 1;
+    go.texelsPerUnit = 4.f;
+
+    Report rep;
+    std::string err;
+    AtlasGen gen;
+    CHECK(generateAtlas(model, group, 0, go, gen, rep, err));
+    CHECK(gen.width == 64);
+    CHECK(gen.height == 16);
+    bool any = false;
+    for (const GenMesh& gm : gen.meshes)
+        for (const GenVertex& gv : gm.vertices) {
+            if (gv.atlasIndex < 0) continue;
+            any = true;
+            CHECK(gv.u >= 0.f && gv.u <= 64.f);
+            CHECK(gv.v >= 0.f && gv.v <= 16.f);
+        }
+    CHECK(any);
+
+    std::vector<BakedImage> baked;
+    BakeOptions bo;
+    bo.filter = Filter::Nearest;
+    CHECK(bakeGroup(model, group, gen, bo, baked, rep, err));
+    for (const BakedImage& b : baked) {
+        CHECK(b.image.w == 64);
+        CHECK(b.image.h == 16 * gen.pageCount);
+    }
+}
+
 int main() {
     testNormalIdentity();
     testNormalFlatRotation();
@@ -535,6 +576,7 @@ int main() {
     testMaterialsVariantsBake();
     testBakeFactors();
     testMultiPageAtlas();
+    testNonSquareAtlas();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);
         return 1;

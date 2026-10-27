@@ -180,14 +180,15 @@ bool generateAtlas(const Model& model, const AtlasGroup& group, int sourceUv,
     xatlas::PackOptions packOpts;
     packOpts.padding = uint32_t(std::max(1, opt.padding));
     int res = 0;
-    if (opt.resolutionW > 0 || opt.resolutionH > 0) {
+    if (opt.resolutionW > 0 || opt.resolutionH > 0)
         res = std::max(opt.resolutionW, opt.resolutionH);
-        packOpts.resolution = uint32_t(res);
-        if (opt.resolutionW != opt.resolutionH && opt.resolutionW > 0 && opt.resolutionH > 0)
-            report.warn("non-square atlas resolution " + std::to_string(opt.resolutionW) + "x" +
-                        std::to_string(opt.resolutionH) +
-                        ": xatlas packs square atlases; using max side " + std::to_string(res) +
-                        " and the actual atlas size reported by xatlas");
+    if (res > 0) packOpts.resolution = uint32_t(res);
+    // The non-square renormalization below compresses the longer axis by
+    // sv; widen pack padding so the smaller axis keeps the requested texel
+    // gutter after the scale.
+    if (res > 0 && opt.resolutionW > 0 && opt.resolutionH > 0 && opt.resolutionW != opt.resolutionH) {
+        float sv = std::min(float(opt.resolutionW) / float(res), float(opt.resolutionH) / float(res));
+        packOpts.padding = uint32_t(std::max(1, int(std::ceil(opt.padding / sv))));
     }
     float tpu = 0.f;
     if (opt.texelsPerUnit > 0.f) {
@@ -195,8 +196,13 @@ bool generateAtlas(const Model& model, const AtlasGroup& group, int sourceUv,
     } else if (res > 0 && groupArea > 1e-12f) {
         // Default density: aim for a well-filled atlas given the group's surface
         // area; xatlas' own estimator leaves small models far too sparse and a
-        // fixed texel count ignores model scale.
-        tpu = std::sqrt(0.6f) * float(res) / std::sqrt(groupArea);
+        // fixed texel count ignores model scale. Sized for the requested area
+        // (sqrt(W*H)), not the square xatlas packs into, so the non-square
+        // renormalization does not overflow into extra pages.
+        float side = float(res);
+        if (opt.resolutionW > 0 && opt.resolutionH > 0)
+            side = std::sqrt(float(opt.resolutionW) * float(opt.resolutionH));
+        tpu = std::sqrt(0.6f) * side / std::sqrt(groupArea);
     }
     packOpts.bilinear = true;
 
@@ -226,6 +232,20 @@ bool generateAtlas(const Model& model, const AtlasGroup& group, int sourceUv,
     }
     out.width = int(atlas->width);
     out.height = int(atlas->height);
+    // xatlas packs square atlases; for a non-square request, rescale the
+    // packed square (per-page pixel coords) to the requested W x H. All
+    // downstream consumers derive sizes from width/height.
+    float su = 1.f, sv = 1.f;
+    if (opt.resolutionW > 0 && opt.resolutionH > 0 && opt.resolutionW != opt.resolutionH &&
+        atlas->width && atlas->height) {
+        su = float(opt.resolutionW) / float(atlas->width);
+        sv = float(opt.resolutionH) / float(atlas->height);
+        out.width = opt.resolutionW;
+        out.height = opt.resolutionH;
+        report.info("atlas '" + group.name + "': packed square " + std::to_string(atlas->width) +
+                    " and renormalized to " + std::to_string(out.width) + "x" +
+                    std::to_string(out.height) + " (pack padding widened before the scale)");
+    }
     out.pageCount = std::max(1, int(atlas->atlasCount));
     out.meshes.resize(atlas->meshCount);
     for (uint32_t m = 0; m < atlas->meshCount; m++) {
@@ -235,8 +255,8 @@ bool generateAtlas(const Model& model, const AtlasGroup& group, int sourceUv,
         out.primOrder.push_back(gm.primId);
         gm.vertices.resize(om.vertexCount);
         for (uint32_t v = 0; v < om.vertexCount; v++) {
-            gm.vertices[v].u = om.vertexArray[v].uv[0];
-            gm.vertices[v].v = om.vertexArray[v].uv[1];
+            gm.vertices[v].u = om.vertexArray[v].uv[0] * su;
+            gm.vertices[v].v = om.vertexArray[v].uv[1] * sv;
             gm.vertices[v].atlasIndex = om.vertexArray[v].atlasIndex;
             gm.vertices[v].xref = om.vertexArray[v].xref;
         }

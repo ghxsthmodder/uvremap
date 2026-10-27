@@ -1,9 +1,9 @@
 # Roadmap — uvremap pós-v0.1.4
 
-Estado: Fases 1–4 do README implementadas e verificados (golden 271/271, releases
-v0.1.0–v0.1.4 com windows-x64 / linux-x86_64 / linux-aarch64). M0 concluído
-(v0.1.3); M1 concluído (2 e 4 a lançar); M2.1 concluído (multi-página por
-empilhamento + BIN chunk real no .glb, a lançar). Prioridades abaixo
+Estado: Fases 1–4 do README implementadas e verificados (golden 273/273, releases
+v0.1.0–v0.1.5 com windows-x64 / linux-x86_64 / linux-aarch64 / android-arm64).
+M0 concluído (v0.1.3); M1 concluído (v0.1.5); M2 concluído (multi-página e
+não-quadrado; v0.1.5 + pending). Prioridades abaixo
 por impacto e risco.
 
 ## Política de versionamento
@@ -92,6 +92,13 @@ concluídos (ver abaixo), a lançar. M1 completo.
 2. **Resolução não quadrada** — xatlas só empacota quadrado; avaliar pós-processo
    de renormalização para WxH arbitrário (re-escalonar UVs do atlas) em vez do
    atual `max(W,H)` com aviso.
+   ✔ Concluído: o runner re-escala os pixels do pack quadrado para o W x H
+   pedido (por eixo) e `gen.width/height` passam a refletir o retângulo real —
+   baker, export e preview derivam tudo desses campos. A densidade default é
+   dimensionada por sqrt(W*H) (não mais o lado máximo) e o padding do pack é
+   ampliado pelo fator de compressão, preservando o gutter em texels no eixo
+   comprimido. Golden: DamagedHelmet 2048x1536 → páginas 2048 x k*1536, 93%
+   de concordância (golden 273/273).
 
 ## M3 — Desempenho e diagnóstico (contínuo)
 

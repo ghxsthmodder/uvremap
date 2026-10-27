@@ -144,6 +144,24 @@ python3 "$ROOT/scripts/verify/check_bake.py" "$WORK/multipage/DamagedHelmet.gltf
     "$SAMPLES/DamagedHelmet/glTF/Default_albedo.jpg" "$MP" >/dev/null 2>&1 \
     && ok "multi-page bake agreement (check_bake.py)" || bad "multi-page bake agreement (check_bake.py)"
 
+# M2.2: non-square --resolution — charts packed square are renormalized to the
+# requested W x H; the baked page width/height must match and transfer hold.
+"$BIN" regenerate "$MP" -o "$WORK/nonsquare" --atlas-mode scene \
+    --resolution 2048x1536 --target-uv 1 --quiet >/dev/null \
+    && python3 - "$WORK/nonsquare" <<'EOF'
+import sys
+from PIL import Image
+w = sys.argv[1]
+assert 'renormalized to 2048x1536' in open(w + '/report.txt').read(), 'no renormalize note'
+sw, sh = Image.open(w + '/textures/scene_0_basecolor.png').size
+assert sw == 2048 and sh >= 1536 and sh % 1536 == 0, f'page size {sw}x{sh} not W x k*H'
+EOF
+if [ $? -eq 0 ]; then ok "non-square: baked pages are 2048 x k*1536"
+else bad "non-square: baked pages are 2048 x k*1536"; fi
+python3 "$ROOT/scripts/verify/check_bake.py" "$WORK/nonsquare/DamagedHelmet.gltf" \
+    "$SAMPLES/DamagedHelmet/glTF/Default_albedo.jpg" "$MP" >/dev/null 2>&1 \
+    && ok "non-square bake agreement (check_bake.py)" || bad "non-square bake agreement (check_bake.py)"
+
 # texture placement option: gltf embedded (data URIs, no textures dir) vs external
 EMB="$WORK/boom-texembed"
 BBI="$SAMPLES/BoomBox/glTF/BoomBox.gltf"

@@ -157,7 +157,11 @@ autorização explícita.
                                       escolha seja explícita.
 
   `--resolution WIDTHxHEIGHT`         Resolução do espaço do atlas usado
-                                      na geração UV. Se as ilhas não
+                                      na geração UV. Qualquer W x H é
+                                      aceito: o xatlas empacota em quadrado
+                                      e o runner re-escala os charts para
+                                      W x H (o padding do pack é ampliado no
+                                      eixo comprimido). Se as ilhas não
                                       couberem, o xatlas abre páginas
                                       extras; as texturas finais empilham
                                       as páginas verticalmente (W x H*N).
