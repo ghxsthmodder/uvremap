@@ -1,7 +1,8 @@
-# Roadmap — uvremap pós-v0.1.2
+# Roadmap — uvremap pós-v0.1.3
 
 Estado: Fases 1–4 do README implementadas e verificados (golden 203/203, releases
-v0.1.0–v0.1.2 com windows-x64 / linux-x86_64 / linux-aarch64). Prioridades abaixo
+v0.1.0–v0.1.2 com windows-x64 / linux-x86_64 / linux-aarch64). M0 concluído e
+lançado na v0.1.3. Prioridades abaixo
 por impacto e risco.
 
 ## Política de versionamento
@@ -12,7 +13,10 @@ zero (próxima release após `0.1.10` é `0.2.0`). Os milestones abaixo não
 carregam versão própria; são entregues em releases 0.1.x sucessivas até estourar
 a série.
 
-## M0 — Correções de exatidão (curar divergências silenciosas)
+## M0 — Correções de exatidão (curar divergências silenciosas) — concluído
+
+Status: itens 1–3 implementados e verificados (unit tests + golden 203/203);
+lançados na v0.1.3.
 
 1. **Primitive mode strip/fan** — hoje `TRIANGLE_STRIP`/`TRIANGLE_FAN` são lidos
    como lista de triângulos sem aviso (silenciosamente errados). Converter para
