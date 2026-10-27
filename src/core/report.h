@@ -32,6 +32,14 @@ class Report {
     void info(const std::string& msg) { infos_.push_back(msg); }
     void error(const std::string& msg) { errors_.push_back(msg); }
 
+    // Merge another report (used when stages run per-atlas in threads and
+    // results are folded back in deterministic group order).
+    void absorb(const Report& other) {
+        warnings_.insert(warnings_.end(), other.warnings_.begin(), other.warnings_.end());
+        infos_.insert(infos_.end(), other.infos_.begin(), other.infos_.end());
+        errors_.insert(errors_.end(), other.errors_.begin(), other.errors_.end());
+    }
+
     const std::vector<std::string>& warnings() const { return warnings_; }
     const std::vector<std::string>& errors() const { return errors_; }
     int warningCount() const { return int(warnings_.size()); }

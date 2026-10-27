@@ -1,9 +1,11 @@
 #include "core/regenerate.h"
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <thread>
 
 #include "core/gltf_io.h"
 #include "core/preview.h"
@@ -174,7 +176,9 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
     }
     progress(3, "Generating UV atlas", true);
 
-    // [4/5] Bake textures + rebuild primitives.
+    // [4/5] Bake textures + rebuild primitives. Baking is the heavy
+    // single-threaded stage; run groups concurrently (xatlas generation is
+    // already internally parallel, so it stays sequential).
     std::vector<AtlasOutput> atlases(groups.size());
     BakeOptions bo;
     bo.filter = o.filter;
@@ -182,7 +186,10 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
     bo.textureW = o.textureW;
     bo.textureH = o.textureH;
     bo.sourceUv = o.sourceUv;
-    for (size_t gi = 0; gi < groups.size(); gi++) {
+    std::vector<Report> bakeReports(groups.size());
+    std::vector<std::string> bakeErrs(groups.size());
+    std::vector<char> bakeOk(groups.size(), 0);
+    auto bakeOne = [&](size_t gi) {
         AtlasOutput& ao = atlases[gi];
         ao.name = groups[gi].name;
         const int pages = std::max(1, gens[gi].pageCount);
@@ -193,13 +200,8 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
         ao.materialIds = groups[gi].materials;
 
         std::vector<BakedImage> baked;
-        if (!bakeGroup(model, groups[gi], gens[gi], bo, baked, rep, err)) {
-            progress(4, "Baking textures", false);
-            res.code = ExitCode::ProcessingFailure;
-            res.message = "texture transfer failed: " + err;
-            fs::remove_all(staging, ec);
-            return res;
-        }
+        if (!bakeGroup(model, groups[gi], gens[gi], bo, baked, bakeReports[gi], bakeErrs[gi]))
+            return;
         ao.baked = std::move(baked);
 
         // Reconstruct vertex data through xref; new UV goes into targetUv.
@@ -223,10 +225,36 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
             }
             rp.indices = gm.indices;
             ao.primitives.push_back(std::move(rp));
-            rep.stats.primitivesProcessed++;
         }
-        int skippedForGroup = 0;
-        (void)skippedForGroup;
+        bakeOk[gi] = 1;
+    };
+    const size_t nGroups = groups.size();
+    unsigned hw = std::thread::hardware_concurrency();
+    size_t nThreads = std::min<size_t>(nGroups, hw > 1 ? hw / 2 : 1);
+    if (nThreads > 1 && nGroups > 1) {
+        std::atomic<size_t> next{0};
+        std::vector<std::thread> pool;
+        pool.reserve(nThreads);
+        for (size_t t = 0; t < nThreads; t++)
+            pool.emplace_back([&] {
+                for (size_t gi = next.fetch_add(1); gi < nGroups; gi = next.fetch_add(1))
+                    bakeOne(gi);
+            });
+        for (auto& th : pool) th.join();
+    } else {
+        for (size_t gi = 0; gi < nGroups; gi++) bakeOne(gi);
+    }
+    // Deterministic merge: reports and stats in group order, first failure wins.
+    for (size_t gi = 0; gi < nGroups; gi++) {
+        rep.absorb(bakeReports[gi]);
+        if (!bakeOk[gi]) {
+            progress(4, "Baking textures", false);
+            res.code = ExitCode::ProcessingFailure;
+            res.message = "texture transfer failed: " + bakeErrs[gi];
+            fs::remove_all(staging, ec);
+            return res;
+        }
+        rep.stats.primitivesProcessed += int(atlases[gi].primitives.size());
     }
     rep.stats.primitivesSkipped =
         rep.stats.primitivesTotal - rep.stats.primitivesProcessed;
