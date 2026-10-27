@@ -26,6 +26,8 @@ enum class TexType : int {
     Count = 5,
 };
 
+inline constexpr int kTexCount = static_cast<int>(TexType::Count);
+
 const char* texTypeName(TexType t);         // "basecolor", "normal", ...
 const char* texTypeGltfSlot(TexType t);     // "baseColorTexture", ...
 
@@ -46,7 +48,7 @@ struct TextureRef {
 
 struct Material {
     std::string name;
-    TextureRef tex[int(TexType::Count)];
+    TextureRef tex[kTexCount];
     V4 baseColorFactor{1, 1, 1, 1};
     V3 emissiveFactor{0, 0, 0};
     float metallicFactor = 0.f;

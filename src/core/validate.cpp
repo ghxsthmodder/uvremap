@@ -37,7 +37,7 @@ std::string eligibilityReason(const Model& model, int primIdx, int sourceUv) {
     // Textures that cannot be transferred safely must not be altered.
     if (p.material >= 0) {
         const Material& m = model.materials[p.material];
-        for (int t = 0; t < int(TexType::Count); t++) {
+        for (int t = 0; t < kTexCount; t++) {
             const TextureRef& ref = m.tex[t];
             if (ref.present && ref.hasTransform &&
                 std::fabs(ref.transform.rotation) > 1e-9)

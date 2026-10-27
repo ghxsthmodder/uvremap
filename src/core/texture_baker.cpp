@@ -75,10 +75,10 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
             matIds.push_back(mat);
     }
 
-    bool needed[int(TexType::Count)] = {};
+    bool needed[kTexCount] = {};
     for (int mat : matIds) {
         const Material& m = model.materials[mat];
-        for (int t = 0; t < int(TexType::Count); t++) {
+        for (int t = 0; t < kTexCount; t++) {
             const TextureRef& ref = m.tex[t];
             if (!ref.present) continue;
             if (ref.hasTransform && std::fabs(ref.transform.rotation) > 1e-9) continue;
@@ -93,8 +93,8 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
         }
     }
 
-    std::vector<Raster> layers(int(TexType::Count));
-    for (int t = 0; t < int(TexType::Count); t++) {
+    std::vector<Raster> layers(kTexCount);
+    for (int t = 0; t < kTexCount; t++) {
         if (!needed[t]) continue;
         layers[t].resize(texW, texH);
         uint8_t n[4];
@@ -150,11 +150,11 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
             }
 
             const int mat = prim.material;
-            PerType pt[int(TexType::Count)];
+            PerType pt[kTexCount];
             bool anyActive = false;
             if (mat >= 0) {
                 const Material& m = model.materials[mat];
-                for (int t = 0; t < int(TexType::Count); t++) {
+                for (int t = 0; t < kTexCount; t++) {
                     if (!needed[t]) continue;
                     const TextureRef& ref = m.tex[t];
                     if (!ref.present) continue;
@@ -202,15 +202,15 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
             maxY = std::min(maxY, texH - 1);
 
             for (int y = minY; y <= maxY; y++) {
-                uint8_t* rowBase[int(TexType::Count)];
-                for (int t = 0; t < int(TexType::Count); t++)
+                uint8_t* rowBase[kTexCount];
+                for (int t = 0; t < kTexCount; t++)
                     rowBase[t] = needed[t] ? layers[t].rgba.data() + size_t(y) * texW * 4 : nullptr;
                 for (int x = minX; x <= maxX; x++) {
                     float p[2] = {x + 0.5f, y + 0.5f};
                     float w[3];
                     if (!barycentric(p, tv0, tv1, tv2, w)) continue;
                     if (w[0] < -1e-6f || w[1] < -1e-6f || w[2] < -1e-6f) continue;
-                    for (int t = 0; t < int(TexType::Count); t++) {
+                    for (int t = 0; t < kTexCount; t++) {
                         if (!pt[t].image || pt[t].uvSet < 0) continue;
                         V2 suv{w[0] * pt[t].su[0].u + w[1] * pt[t].su[1].u + w[2] * pt[t].su[2].u,
                                w[0] * pt[t].su[0].v + w[1] * pt[t].su[1].v + w[2] * pt[t].su[2].v};
@@ -250,7 +250,7 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                     " duplicated source triangle(s) (same corners, different UVs possible); "
                     "first occurrence used");
 
-    for (int t = 0; t < int(TexType::Count); t++) {
+    for (int t = 0; t < kTexCount; t++) {
         if (!needed[t] || layers[t].rgba.empty()) continue;
         Image out;
         out.name = group.name + "_" + texTypeName(TexType(t));

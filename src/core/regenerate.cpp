@@ -61,7 +61,7 @@ std::string renderDryRunPlan(const Model& model, const std::vector<AtlasGroup>& 
            << g.materials.size() << " material(s)\n";
         for (int mat : g.materials) {
             if (mat < 0) continue;
-            for (int t = 0; t < int(TexType::Count); t++)
+            for (int t = 0; t < kTexCount; t++)
                 if (textureBakeable(model, mat, TexType(t)))
                     os << "      - bake " << texTypeName(TexType(t)) << " from material "
                        << mat << " (" << model.materials[mat].name << ")\n";
