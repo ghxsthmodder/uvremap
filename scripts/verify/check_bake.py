@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Verify uvremap-baked atlases against the original source textures.
+
+Run uvremap with --source-uv 0 --target-uv 1 so the output keeps both the
+source UVs (TEXCOORD_0) and the new atlas UVs (TEXCOORD_1). For random
+points on the remeshed triangles this samples the baked atlas at the atlas
+UV and the original texture at the source UV and checks agreement.
+
+Usage: check_bake.py <output.gltf|output.glb> <original_basecolor.png>
+Exit 0 when >=90% of covered sample points agree.
+"""
+import base64, io, json, os, struct, sys
+
+import numpy as np
+from PIL import Image
+
+if len(sys.argv) < 3:
+    print(__doc__);
+    sys.exit(2)
+path, orig_path = sys.argv[1], sys.argv[2]
+
+
+def load_gltf(p):
+    if p.endswith('.glb'):
+        with open(p, 'rb') as f:
+            data = f.read()
+        ln, typ = struct.unpack('<II', data[12:20])
+        assert typ == 0x4E4F534A
+        j = json.loads(data[20:20 + ln])
+        j['_bin'] = data[20 + ln + 8:]
+        return j
+    with open(p) as f:
+        return json.load(f)
+
+
+j = load_gltf(path)
+BASE = os.path.dirname(os.path.abspath(path))
+
+
+def buffer_bytes(j, i):
+    b = j['buffers'][i]
+    if 'uri' not in b:
+        return j['_bin']
+    uri = b['uri']
+    if uri.startswith('data:'):
+        return base64.b64decode(uri.split(',', 1)[1])
+    with open(os.path.join(BASE, uri), 'rb') as f:
+        return f.read()
+
+
+CT = {'5120': ('b', 1), '5121': ('B', 1), '5122': ('h', 2), '5123': ('H', 2),
+      '5124': ('i', 4), '5125': ('I', 4), '5126': ('f', 4)}
+NT = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4}
+
+
+def read_accessor(j, idx):
+    a = j['accessors'][idx]
+    fmt, comp = CT[str(a['componentType'])]
+    n = NT[a['type']]
+    bv = j['bufferViews'][a['bufferView']]
+    buf = buffer_bytes(j, bv['buffer'])
+    stride = bv.get('byteStride', comp * n)
+    off = bv.get('byteOffset', 0) + a.get('byteOffset', 0)
+    out = np.empty((a['count'], n), dtype=np.float64)
+    for i in range(a['count']):
+        out[i] = struct.unpack_from('<' + fmt * n, buf, off + i * stride)
+    return out
+
+
+def image_bytes(j, i):
+    img = j['images'][i]
+    if 'uri' in img:
+        with open(os.path.join(BASE, img['uri']), 'rb') as f:
+            return f.read()
+    bv = j['bufferViews'][img['bufferView']]
+    buf = buffer_bytes(j, bv['buffer'])
+    return buf[bv.get('byteOffset', 0):bv.get('byteOffset', 0) + bv['byteLength']]
+
+
+def to_img(arr):
+    return np.array(Image.open(io.BytesIO(arr)).convert('RGB'), dtype=np.float64)
+
+
+def sample_nearest(img, u, v):
+    h, w = img.shape[:2]
+    x = int(np.clip(u * w, 0, w - 1))
+    y = int(np.clip(v * h, 0, h - 1))
+    return img[y, x]
+
+
+orig = to_img(open(orig_path, 'rb').read())
+rng = np.random.default_rng(7)
+total_ok = total = 0
+for p_idx, mesh in enumerate(j.get('meshes', [])):
+    for pi, prim in enumerate(mesh['primitives']):
+        attrs = prim['attributes']
+        if 'TEXCOORD_1' not in attrs:
+            print(f"mesh[{p_idx}] prim[{pi}]: no TEXCOORD_1 — left unchanged, skipping")
+            continue
+        mat = j['materials'][prim['material']] if 'material' in prim else {}
+        pbr = mat.get('pbrMetallicRoughness', {})
+        if 'baseColorTexture' not in pbr:
+            continue
+        atlas = to_img(image_bytes(j, pbr['baseColorTexture']['index']))
+        pos = read_accessor(j, attrs['POSITION'])
+        uv0 = read_accessor(j, attrs['TEXCOORD_0'])
+        uv1 = read_accessor(j, attrs['TEXCOORD_1'])
+        if uv1[:, :2].min() < -1e-3 or uv1[:, :2].max() > 1 + 1e-3:
+            print(f"mesh[{p_idx}] prim[{pi}]: FAIL atlas UVs outside [0,1]")
+            sys.exit(1)
+        idx = (read_accessor(j, prim['indices']).astype(int).ravel()
+               if 'indices' in prim else np.arange(len(pos)))
+        tris = idx.reshape(-1, 3)
+        sel = rng.integers(0, len(tris), size=min(3000, len(tris)))
+        n_ok = n_tot = 0
+        for t in sel:
+            a, b, c = tris[t]
+            w = rng.random(2)
+            w = np.append(w, 1 - w.sum())
+            if (w < 0).any():
+                continue
+            d1 = uv1[b, :2] - uv1[a, :2]
+            d2 = uv1[c, :2] - uv1[a, :2]
+            area_atlas = abs(d1[0] * d2[1] - d2[0] * d1[1]) / 2
+            if area_atlas < 1e-8:
+                continue
+            ua = w[0] * uv1[a, :2] + w[1] * uv1[b, :2] + w[2] * uv1[c, :2]
+            us = w[0] * uv0[a, :2] + w[1] * uv0[b, :2] + w[2] * uv0[c, :2]
+            pa = sample_nearest(atlas, ua[0], ua[1])
+            ps = sample_nearest(orig, us[0] % 1.0, us[1] % 1.0)
+            n_tot += 1
+            if np.abs(pa - ps).max() < 40:
+                n_ok += 1
+        if n_tot:
+            total_ok += n_ok
+            total += n_tot
+            print(f"mesh[{p_idx}] prim[{pi}]: agreement {n_ok}/{n_tot} ({100 * n_ok / n_tot:.1f}%)")
+
+print(f"TOTAL: {total_ok}/{total} ({100 * total_ok / max(1, total):.1f}%)")
+sys.exit(0 if total > 0 and total_ok >= 0.9 * total else 1)

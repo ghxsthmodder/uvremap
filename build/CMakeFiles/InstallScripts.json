@@ -1,0 +1,10 @@
+{
+	"InstallScripts" : 
+	[
+		"/root/uvremap/build/cmake_install.cmake",
+		"/root/uvremap/build/third_party/cmake_install.cmake",
+		"/root/uvremap/build/src/cmake_install.cmake",
+		"/root/uvremap/build/tests/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
