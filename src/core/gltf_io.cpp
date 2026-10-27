@@ -818,10 +818,11 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
         tinygltf::Buffer b;
         tg.buffers.push_back(b);
     }
-    if (!opt.binary && tg.buffers.size() > 1) {
-        // Keep buffers; new data goes into buffer 0.
-    }
-    if (tg.buffers[0].uri.empty())
+    // GLB: tinygltf emits the BIN chunk only when buffer 0 has no URI; any
+    // leftover .bin/data: URI from the input would be embedded into the JSON.
+    if (opt.binary)
+        tg.buffers[0].uri.clear();
+    else if (tg.buffers[0].uri.empty())
         tg.buffers[0].uri = fs::path(opt.modelFilename).stem().string() + ".bin";
 
     BufWriter bw{&tg.buffers[0].data, tg.buffers[0].data.size()};

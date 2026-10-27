@@ -157,6 +157,31 @@ fi
 expect "external + glb rejected" 2 \
     "$BIN" regenerate "$BBI" -o "$WORK/texext-glb" --atlas-mode material --format glb --textures external
 
+# GLB output must carry a real BIN chunk (buffer in binary), not a data-URI buffer in JSON
+"$BIN" regenerate "$BBI" -o "$WORK/glbchunk" --atlas-mode material --format glb --quiet >/dev/null \
+    && python3 - "$WORK/glbchunk/BoomBox.glb" <<'PY' >/dev/null 2>&1
+import struct, sys
+d = open(sys.argv[1], 'rb').read()
+magic, ver, total = struct.unpack('<4sII', d[:12])
+assert magic == b'glTF' and ver == 2 and total == len(d), 'bad header'
+off, chunks = 12, []
+while off < len(d):
+    clen, ctype = struct.unpack('<I4s', d[off:off + 8])
+    chunks.append(ctype)
+    off += 8 + clen
+assert b'BIN\x00' in chunks, 'missing BIN chunk'
+assert b'JSON' in chunks, 'missing JSON chunk'
+import json
+joff = 12 + 8
+jlen, = struct.unpack('<I', d[12:16])
+g = json.loads(d[joff:joff + jlen])
+assert all('uri' not in b for b in g.get('buffers', [])), 'buffer has uri in GLB'
+PY
+if [ $? -eq 0 ]; then ok "glb: real BIN chunk, buffer without uri"
+else bad "glb: real BIN chunk, buffer without uri"; fi
+expect "invalid --textures value" 2 \
+    "$BIN" regenerate "$BBI" -o "$WORK/texbogus" --atlas-mode material --textures bogus
+
 # --bake-factors on a synthetic texture-less model (M1.4): factors fold into
 # rebuilt textures and the cloned materials end up factor-neutral.
 FACT="$WORK/factor/factor_model.gltf"
