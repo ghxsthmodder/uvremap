@@ -151,7 +151,8 @@ concluídos (ver abaixo), a lançar. M1 completo.
 - Fluxo já automatizado: bump `project()` → tag `vX.Y.Z` → CI publica 3 binários.
 - Manter README atualizado para novas opções (fonte de verdade das fases).
 - Amostras privadas em `samples/private/` (gitignored) fazem parte da verificação
-  manual de cada milestone; considerar script `run_private.sh` separado do golden.
+  manual de cada milestone; `scripts/verify/run_private.sh` roda a regressão do
+  MF188 (scene/gltf + bake-factors + self-check + checagem M4.1) fora do golden.
 
 ## Não fazer (decisão consciente)
 
