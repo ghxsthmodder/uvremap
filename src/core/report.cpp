@@ -36,8 +36,7 @@ std::string Report::renderText(const std::string& header) const {
     return os.str();
 }
 
-namespace {
-std::string jsonEsc(const std::string& s) {
+std::string jsonEscape(const std::string& s) {
     std::string out;
     out.reserve(s.size() + 8);
     for (char c : s) {
@@ -61,9 +60,11 @@ std::string jsonEsc(const std::string& s) {
     return out;
 }
 
+namespace {
 void jsonStrings(std::ostringstream& os, const char* key, const std::vector<std::string>& v) {
     os << "  \"" << key << "\": [";
-    for (size_t i = 0; i < v.size(); i++) os << (i ? ", " : "") << "\"" << jsonEsc(v[i]) << "\"";
+    for (size_t i = 0; i < v.size(); i++)
+        os << (i ? ", " : "") << "\"" << jsonEscape(v[i]) << "\"";
     os << "],\n";
 }
 }  // namespace
@@ -71,11 +72,11 @@ void jsonStrings(std::ostringstream& os, const char* key, const std::vector<std:
 std::string Report::renderJson(const ReportMeta& meta) const {
     std::ostringstream os;
     os << "{\n";
-    os << "  \"tool\": \"" << jsonEsc(meta.tool) << "\",\n";
-    os << "  \"version\": \"" << jsonEsc(meta.version) << "\",\n";
-    os << "  \"input\": \"" << jsonEsc(meta.input) << "\",\n";
-    os << "  \"output\": \"" << jsonEsc(meta.output) << "\",\n";
-    os << "  \"atlasMode\": \"" << jsonEsc(meta.atlasMode) << "\",\n";
+    os << "  \"tool\": \"" << jsonEscape(meta.tool) << "\",\n";
+    os << "  \"version\": \"" << jsonEscape(meta.version) << "\",\n";
+    os << "  \"input\": \"" << jsonEscape(meta.input) << "\",\n";
+    os << "  \"output\": \"" << jsonEscape(meta.output) << "\",\n";
+    os << "  \"atlasMode\": \"" << jsonEscape(meta.atlasMode) << "\",\n";
     os << "  \"stats\": {\n";
     os << "    \"primitivesTotal\": " << stats.primitivesTotal << ",\n";
     os << "    \"primitivesProcessed\": " << stats.primitivesProcessed << ",\n";
@@ -96,7 +97,7 @@ std::string Report::renderJson(const ReportMeta& meta) const {
             std::snprintf(coverage, sizeof coverage, "%.6g", u.coverage);
             std::snprintf(density, sizeof density, "%.6g", u.texelsPerUnit);
             std::snprintf(area, sizeof area, "%.6g", u.surfaceArea);
-            os << "    {\"name\": \"" << jsonEsc(u.name) << "\", "
+            os << "    {\"name\": \"" << jsonEscape(u.name) << "\", "
                << "\"width\": " << u.width << ", \"height\": " << u.height << ", \"pages\": "
                << u.pages << ", \"coverage\": " << coverage
                << ", \"texelsPerUnit\": " << density << ", \"surfaceArea\": " << area << "}"

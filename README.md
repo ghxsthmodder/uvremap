@@ -101,7 +101,7 @@ recursos.
 A forma geral proposta é:
 
 ``` text
-uvremap <command> [options] <input>
+uvremap <command> [options] <input> [<input> ...]
 ```
 
 ### Comandos
@@ -148,7 +148,10 @@ autorização explícita.
   Opção                               Descrição
   ----------------------------------- -----------------------------------
   `-o, --output PATH`                 Diretório de saída com o modelo e
-                                      os recursos gerados.
+                                      os recursos gerados. Com vários
+                                      arquivos de entrada, é a raiz do lote:
+                                      cada modelo publica em
+                                      `<output>/<nome-do-arquivo>/`.
 
   `--atlas-mode MODE`                 Estratégia de agrupamento:
                                       `material`, `mesh` ou `scene`.
@@ -393,6 +396,43 @@ uvremap regenerate model.glb \
   --verbose
 ```
 
+### Modo lote
+
+Qualquer comando que lê um arquivo aceita vários de uma vez; os arquivos
+são processados um após o outro, na ordem da linha de comando (`scan`,
+`inspect` e `preview` imprimem um modelo após o outro, com o cabeçalho
+`=== <arquivo>` quando há mais de um). No lote o `--output` deixa de ser o
+diretório do modelo e passa a ser a **raiz do lote**: cada entrada publica
+em um subdiretório com o nome do arquivo de entrada (sem a extensão), e
+dois arquivos com o mesmo nome recebem sufixo `-2`, `-3`, … na ordem dos
+argumentos.
+
+``` bash
+uvremap regenerate \
+  --output ./batch_out \
+  --atlas-mode material \
+  vehicle.glb cockpit.glb wheel.glb
+```
+
+O que cada subdiretório contém é exatamente o que a mesma execução com um
+único arquivo produziria — modelo, texturas, `report.txt` e, com `--json`,
+`report.json`. Os parâmetros de atlas são os mesmos para todos os modelos;
+não há estado compartilhado entre eles, de modo que o resultado de um
+modelo não depende de quantos outros entraram no lote.
+
+Na raiz do lote fica o **resumo somado** (`batch_report.txt`, e
+`batch_report.json` com `--json`): uma linha por modelo com o que ele
+produziu (atlases, mapas gravados, primitivas tratadas, avisos, o pior
+acordo do `--self-check`) ou com o motivo da recusa, e no fim os totais
+somados. A saída do terminal mostra a mesma tabela.
+
+Uma falha não interrompe o lote: um arquivo que não carrega, uma geometria
+insuficiente ou um gate `--fail-under` estourado encerram **aquele** modelo
+— que não publica nada — e os demais continuam. O código de saída do lote é
+o maior código não-zero produzido; zero só quando todos os modelos
+terminaram. Um pipeline que precise do motivo de cada modelo lê o
+`batch_report.txt` da raiz (ou `batch_report.json`).
+
 ## Transferência de texturas PBR
 
 A meta é transferir todos os tipos de textura PBR suportados pelo
@@ -561,6 +601,11 @@ o modelo exportado contiver referências quebradas ou se uma
 transferência obrigatória tiver falhado. O `--fail-under` usa o código
 `5`: a transferência foi concluída, mas a verificação estatística disse que
 não ficou boa o bastante — e nada é publicado nesse caso.
+
+No lote (ver *Modo lote*) cada modelo tem seu próprio código e o processo
+devolve o maior código não-zero entre eles: `0` apenas quando todos os
+modelos terminaram. O motivo modelo a modelo fica no `batch_report.txt` da
+raiz.
 
 ## Regras de integridade e segurança de saída
 

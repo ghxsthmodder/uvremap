@@ -218,6 +218,67 @@ PY
 expect "jobs: invalid value" 2 \
     "$BIN" regenerate "$MP" -o "$WORK/jobs0" --atlas-mode scene --jobs 0
 
+# M5.7: modo lote — several inputs share --output as the batch root, every model
+# publishes into its own directory with its own report, and a model that fails
+# does not stop the ones after it.
+B1="$SAMPLES/BoxTextured/glTF-Binary/BoxTextured.glb"
+STM="$SAMPLES/SimpleTexture/glTF-Embedded/SimpleTexture.gltf"
+NOUV="$SAMPLES/Box/glTF-Binary/Box.glb"
+expect "batch: no --output -> 2" 2 "$BIN" regenerate --atlas-mode scene "$B1" "$STM"
+expect "batch: two models exit 0" 0 \
+    "$BIN" regenerate -o "$WORK/batch" --atlas-mode scene --quiet "$B1" "$STM"
+if [ -f "$WORK/batch/BoxTextured/report.txt" ] && [ -f "$WORK/batch/SimpleTexture/report.txt" ]; then
+    ok "batch: one directory and report per model"
+else
+    bad "batch: one directory and report per model"
+fi
+if grep -q "Batch: 2 model(s), 2 ok, 0 failed" "$WORK/batch/batch_report.txt" &&
+   grep -q "Totals: 2 atlas(es)" "$WORK/batch/batch_report.txt"; then
+    ok "batch: aggregate summary in batch_report.txt"
+else
+    bad "batch: aggregate summary in batch_report.txt"
+fi
+expect "batch: a failed model does not stop the rest" 4 \
+    "$BIN" regenerate -o "$WORK/batchfail" --atlas-mode scene --quiet "$NOUV" "$B1"
+if grep -q "FAIL  Box" "$WORK/batchfail/batch_report.txt" &&
+   [ -f "$WORK/batchfail/BoxTextured/report.txt" ]; then
+    ok "batch: failure recorded, later models still published"
+else
+    bad "batch: failure recorded, later models still published"
+fi
+# two inputs sharing a file name must still get one directory each
+mkdir -p "$WORK/dup/a" "$WORK/dup/b"
+cp "$B1" "$WORK/dup/a/scene.glb"
+cp "$STM" "$WORK/dup/b/scene.gltf"
+expect "batch: repeated stems exit 0" 0 \
+    "$BIN" regenerate -o "$WORK/batchdup" --atlas-mode scene --quiet \
+        "$WORK/dup/a/scene.glb" "$WORK/dup/b/scene.gltf"
+if [ -d "$WORK/batchdup/scene" ] && [ -d "$WORK/batchdup/scene-2" ]; then
+    ok "batch: repeated stems get separate directories"
+else
+    bad "batch: repeated stems get separate directories"
+fi
+# --json keeps stdout pure JSON and leaves the same aggregate on disk
+expect "batch --json exit 0" 0 \
+    "$BIN" regenerate -o "$WORK/batchjson" --atlas-mode scene --json "$B1" "$STM"
+if python3 - "$WORK/batchjson/batch_report.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d['batch'] is True and len(d['models']) == 2
+assert all(m['exit'] == 0 for m in d['models'])
+assert d['summary']['succeeded'] == 2 and d['summary']['atlasCount'] == 2
+PY
+then ok "batch --json: models + summary parse"; else bad "batch --json: models + summary parse"; fi
+if python3 - "$WORK/stdout" <<'PY'
+import json, sys
+assert len(json.load(open(sys.argv[1]))['models']) == 2
+PY
+then ok "batch --json: stdout is pure JSON"; else bad "batch --json: stdout is pure JSON"; fi
+expect "batch scan: bad file does not stop the rest" 3 \
+    "$BIN" scan "$WORK/does-not-exist.glb" "$B1"
+grep -q "Format:" "$WORK/stdout" && ok "batch scan: the good model was still analyzed" \
+    || bad "batch scan: the good model was still analyzed"
+
 # M3.3: --preview emits diagnostic PNGs (atlas layout, UV compare, heatmaps)
 png_dims() { # <file> <w> <h>
     python3 - "$1" "$2" "$3" <<'PY'

@@ -309,6 +309,34 @@ ficam para a `0.2.x` (ver M6).
    cobertos pelas ilhas. README: parágrafo da banda em *Transferência de texturas
    PBR* e nota em `--padding`. Golden 315/315, privado 8/8, self-check 99,4–100%.
 7. **Modo lote** — vários arquivos de entrada.
+   ✔ Concluído: qualquer comando que lê um arquivo aceita várias entradas,
+   processadas uma após outra na ordem dos argumentos. Em lote o `--output`
+   passa a ser a **raiz**: cada modelo publica em `<raiz>/<nome sem
+   extensão>/` (colisão de nome vira `-2`, `-3`, … na ordem dos argumentos), e
+   o que sai naquele subdiretório é idêntico ao que a mesma execução com um
+   arquivo produziria — modelo, texturas, `report.txt` e `report.json` com
+   `--json`. Não há estado compartilhado entre modelos, então o resultado de
+   um não depende de quantos outros entraram. Na raiz fica o resumo somado
+   (`batch_report.txt`, mais `batch_report.json` com `--json`): uma linha por
+   modelo com o que ele produziu (atlases, mapas, primitivas, avisos, o pior
+   acordo do `--self-check`) ou com o motivo da recusa, e os totais no fim — a
+   mesma tabela que vai para o terminal. A falha de um modelo não aborta os
+   demais: o arquivo que não carrega, a geometria insuficiente e o gate
+   `--fail-under` estourado encerram apenas aquele modelo (que não publica
+   nada) e o lote continua; o código de saída é o maior código não-zero
+   produzido, `0` só quando todos terminam. `--dry-run` não escreve a raiz.
+   Para os comandos de diagnóstico (`scan`, `inspect`, `preview`) o lote é o
+   mesmo laço, com um cabeçalho `=== <arquivo>` por modelo e o mesmo código
+   agregado. README: seção *Modo lote*, nota em `--output` e o parágrafo dos
+   códigos de saída. Golden novos: dois modelos ok (exit `0`, um diretório e
+   um `report.txt` por modelo, totais no `batch_report.txt`), lote com um
+   modelo recusado (exit `4`, os demais ainda publicados), nomes repetidos em
+   diretórios separados, `--json` (stdout puro e o agregado lido do disco) e
+   um `scan` de arquivo inexistente que não impede o modelo seguinte. Verificado
+   no binário final: unit ok, golden 328/328 (os 13 checks novos inclusos),
+   privado 8/8, e um lote manual de três modelos com `--self-check 500` fecha em
+   `worst self-check 97,8%` na linha de totais — o pior acordo do lote é o pior
+   entre os modelos, não uma média.
 
 ## M6 — Texturas comprimidas e mipmaps (0.2.x, adiado da 0.1.10)
 
@@ -323,6 +351,12 @@ ficam para a `0.2.x` (ver M6).
    padding) ou documentar a limitação e avisar quando o `minFilter` do modelo pede mip.
 
 ## Infra recorrente (a cada release)
+
+- A banca golden escreve em `/tmp/uvremap-verify.XXXXXX`, que aqui é tmpfs: ela
+  pede ~1,5 GB livres e, quando o disco enche no fim da corrida, os últimos
+  checks falham com `SIGSEGV` dentro do gravador de imagem (alocação que
+  retorna nula), não com uma mensagem de espaço. Liberar `/tmp` antes da
+  corrida é o remédio; nada no código muda por causa disso.
 
 - Fluxo já automatizado: bump `project()` → tag `vX.Y.Z` → CI publica 3 binários.
 - Manter README atualizado para novas opções (fonte de verdade das fases).

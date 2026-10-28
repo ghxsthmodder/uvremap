@@ -28,6 +28,10 @@ struct Stats {
     int imagesWritten = 0;
 };
 
+// Escape a string for a JSON string literal. Shared by the per-model report
+// and the CLI's batch summary.
+std::string jsonEscape(const std::string& s);
+
 // Context fields for the JSON serialization (not stored in Report itself).
 struct ReportMeta {
     std::string tool, version, input, output, atlasMode;

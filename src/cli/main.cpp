@@ -1,7 +1,9 @@
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <new>
 #include <sstream>
@@ -71,7 +73,7 @@ bool parseInt(const std::string& s, int& v) {
 void printUsage(std::ostream& os) {
     os << "uvremap " UVREMAP_VERSION " — UV mapping regeneration for glTF/GLB\n"
        << R"(
-usage: uvremap <command> [options] <input>
+usage: uvremap <command> [options] <input> [<input> ...]
 
 commands:
   regenerate   generate a new UV mapping and transfer the textures
@@ -80,8 +82,16 @@ commands:
   preview      write diagnostic images of the source UV layout
   version      print version and build information
 
+batch mode (any command that reads an input):
+  several inputs run one after another; --output is then the batch root and
+  each model publishes into <output>/<name>/ with its own report, and the
+  batch leaves a summed batch_report.txt (batch_report.json with --json) in
+  the root. A failing model does not stop the others: the exit code is the
+  highest non-zero code the batch produced.
+
 regenerate/preview options:
-  -o, --output PATH            output directory (default: <input>_remapped)
+  -o, --output PATH            output directory (default: <input>_remapped);
+                               with several inputs, the batch root
       --atlas-mode MODE        material | mesh | scene (required for regenerate)
       --resolution WxH         atlas resolution
       --padding PIXELS         UV island margin in atlas texels (default 4)
@@ -248,7 +258,8 @@ int parseArgs(int argc, char** argv, Args& a) {
         a.error = "missing input file";
         return 2;
     }
-    a.input = a.positional.back();
+    // Every positional is an input; a batch runs them in argument order.
+    a.input = a.positional.front();
     return 0;
 }
 
@@ -391,7 +402,7 @@ int cmdInspect(LoadResult& L, const Args& a) {
     return 0;
 }
 
-int cmdPreview(LoadResult& L, const Args& a, bool afterRegen = false) {
+int cmdPreview(LoadResult& L, const Args& a) {
     std::string outDir = a.output;
     if (outDir.empty()) outDir = a.input + "_preview";
     std::error_code ec;
@@ -426,10 +437,236 @@ int cmdPreview(LoadResult& L, const Args& a, bool afterRegen = false) {
     return 0;
 }
 
+void printStep(int n, const std::string& name, bool ok) {
+    std::ostringstream os;
+    os << "[" << n << "/5] " << name;
+    std::string s = os.str();
+    std::cout << s << std::string(std::max(0, 32 - int(s.size())), '.')
+              << (ok ? " OK\n" : " FAIL\n");
+    std::cout.flush();
+}
+
+// Batch layout: --output is the root and each input publishes into a directory
+// named after its file stem, so the batch leaves N outputs that a single-file
+// run would produce identically. Inputs sharing a stem get -2, -3, ... in
+// argument order: two scenes both called scene.gltf still land apart.
+std::string batchMemberDir(const std::string& root, const std::string& input,
+                           std::vector<std::string>& taken) {
+    std::string stem = std::filesystem::path(input).stem().string();
+    if (stem.empty()) stem = "model";
+    std::string name = stem;
+    for (int n = 2; std::find(taken.begin(), taken.end(), name) != taken.end(); n++)
+        name = stem + "-" + std::to_string(n);
+    taken.push_back(name);
+    return (std::filesystem::path(root) / name).string();
+}
+
+std::string padTo(const std::string& s, size_t w) {
+    return s.size() >= w ? s : s + std::string(w - s.size(), ' ');
+}
+
+std::string fileName(const std::string& path) {
+    return std::filesystem::path(path).filename().string();
+}
+
+struct ModelRow {
+    std::string input, output, note;
+    int code = 0;
+    Stats stats;
+    int warnings = 0;
+    float worst = -1.f;  // --self-check agreement, negative when not measured
+};
+
+int batchExitCode(const std::vector<ModelRow>& rows) {
+    int code = 0;
+    for (const ModelRow& r : rows) code = std::max(code, r.code);
+    return code;
+}
+
+std::string oneLine(const std::string& s) {
+    std::string out = s;
+    for (auto& c : out)
+        if (c == '\n' || c == '\r') c = ' ';
+    return out;
+}
+
+// The batch summary is what a pipeline reads when several models ran: one line
+// per model with what it produced or why it was refused, then the totals.
+std::string batchSummaryText(const std::vector<ModelRow>& rows) {
+    Stats t;
+    int okCount = 0, warnings = 0;
+    float worst = -1.f;
+    for (const ModelRow& r : rows) {
+        t.primitivesTotal += r.stats.primitivesTotal;
+        t.primitivesProcessed += r.stats.primitivesProcessed;
+        t.atlasCount += r.stats.atlasCount;
+        t.textureMapsBaked += r.stats.textureMapsBaked;
+        if (r.code == 0) okCount++;
+        warnings += r.warnings;
+        if (r.worst >= 0.f && (worst < 0.f || r.worst < worst)) worst = r.worst;
+    }
+    char buf[512];
+    std::ostringstream os;
+    os << "Batch: " << rows.size() << " model(s), " << okCount << " ok, "
+       << (rows.size() - size_t(okCount)) << " failed\n\n";
+    for (const ModelRow& r : rows) {
+        os << "  " << (r.code == 0 ? "ok  " : "FAIL") << "  " << padTo(fileName(r.input), 28)
+           << padTo(r.output, 34);
+        if (r.code == 0) {
+            std::snprintf(buf, sizeof buf, "atlases %d, maps %d, primitives %d/%d, warnings %d",
+                          r.stats.atlasCount, r.stats.textureMapsBaked,
+                          r.stats.primitivesProcessed, r.stats.primitivesTotal, r.warnings);
+            os << buf;
+            if (r.worst >= 0.f) {
+                std::snprintf(buf, sizeof buf, ", worst self-check %.1f%%", double(r.worst));
+                os << buf;
+            }
+        } else {
+            os << "exit " << r.code << (r.note.empty() ? "" : ": " + r.note);
+        }
+        os << "\n";
+    }
+    std::snprintf(buf, sizeof buf,
+                  "\n  Totals: %d atlas(es), %d texture map(s), %d/%d primitive(s), %d warning(s)",
+                  t.atlasCount, t.textureMapsBaked, t.primitivesProcessed, t.primitivesTotal,
+                  warnings);
+    os << buf;
+    if (worst >= 0.f) {
+        std::snprintf(buf, sizeof buf, ", worst self-check %.1f%%", double(worst));
+        os << buf;
+    }
+    os << "\n";
+    return os.str();
+}
+
+std::string jsonNumber(float f) {
+    if (f < 0.f) return "null";
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%.1f", double(f));
+    return buf;
+}
+
+std::string batchJson(const Args& a, const std::vector<ModelRow>& rows) {
+    Stats t;
+    int okCount = 0, warnings = 0;
+    float worst = -1.f;
+    for (const ModelRow& r : rows) {
+        t.primitivesTotal += r.stats.primitivesTotal;
+        t.primitivesProcessed += r.stats.primitivesProcessed;
+        t.atlasCount += r.stats.atlasCount;
+        t.textureMapsBaked += r.stats.textureMapsBaked;
+        if (r.code == 0) okCount++;
+        warnings += r.warnings;
+        if (r.worst >= 0.f && (worst < 0.f || r.worst < worst)) worst = r.worst;
+    }
+    std::ostringstream os;
+    os << "{\n"
+       << "  \"tool\": \"uvremap\",\n"
+       << "  \"version\": \"" UVREMAP_VERSION "\",\n"
+       << "  \"batch\": true,\n"
+       << "  \"output\": \"" << jsonEscape(a.output) << "\",\n"
+       << "  \"atlasMode\": \"" << jsonEscape(a.atlasMode) << "\",\n"
+       << "  \"models\": [\n";
+    for (size_t i = 0; i < rows.size(); i++) {
+        const ModelRow& r = rows[i];
+        os << "    {\"input\": \"" << jsonEscape(r.input) << "\", "
+           << "\"output\": \"" << jsonEscape(r.output) << "\", "
+           << "\"exit\": " << r.code << ", "
+           << "\"error\": \"" << jsonEscape(r.note) << "\", "
+           << "\"primitivesTotal\": " << r.stats.primitivesTotal << ", "
+           << "\"primitivesProcessed\": " << r.stats.primitivesProcessed << ", "
+           << "\"atlasCount\": " << r.stats.atlasCount << ", "
+           << "\"textureMapsBaked\": " << r.stats.textureMapsBaked << ", "
+           << "\"warningCount\": " << r.warnings << ", "
+           << "\"worstAgreement\": " << jsonNumber(r.worst) << "}"
+           << (i + 1 < rows.size() ? "," : "") << "\n";
+    }
+    os << "  ],\n  \"summary\": {\"models\": " << rows.size() << ", \"succeeded\": " << okCount
+       << ", \"failed\": " << (rows.size() - size_t(okCount)) << ", \"atlasCount\": "
+       << t.atlasCount << ", \"textureMapsBaked\": " << t.textureMapsBaked
+       << ", \"primitivesProcessed\": " << t.primitivesProcessed << ", \"primitivesTotal\": "
+       << t.primitivesTotal << ", \"warningCount\": " << warnings << ", \"worstAgreement\": "
+       << jsonNumber(worst) << "}\n}\n";
+    return os.str();
+}
+
+// Several inputs, one after another. A model that fails is recorded and the
+// batch moves on: a pipeline would rather see every result than stop at the
+// first bad file, and each model publishes into its own directory, so nothing
+// a later model writes can undo what an earlier one already passed.
+int cmdRegenerateBatch(const Args& a, const RegenOptions& proto) {
+    std::vector<ModelRow> rows;
+    std::vector<std::string> taken;
+    for (size_t i = 0; i < a.positional.size(); i++) {
+        const std::string& input = a.positional[i];
+        ModelRow row;
+        row.input = input;
+        row.output = batchMemberDir(a.output, input, taken);
+        RegenOptions o = proto;
+        o.output = row.output;
+        if (!a.quiet && !a.json) {
+            std::cout << "--- model " << (i + 1) << "/" << a.positional.size() << ": " << input
+                      << " -> " << row.output << "\n";
+            std::cout.flush();
+        }
+        o.progress = [&](int n, const std::string& name, bool ok) {
+            if (a.quiet || a.dryRun || a.json) return;
+            printStep(n, name, ok);
+        };
+        RegenResult res = runRegenerate(input, o);
+        row.code = int(res.code);
+        if (row.code != 0) {
+            row.note = oneLine(res.message.empty() ? res.report.renderText("") : res.message);
+            std::cerr << "uvremap: " << input << ": " << row.note << "\n";
+        }
+        if (a.dryRun && !a.quiet && !a.json && !res.message.empty()) std::cout << res.message;
+        row.stats = res.report.stats;
+        row.warnings = res.report.warningCount();
+        row.worst = res.report.worstAgreement;
+        rows.push_back(std::move(row));
+    }
+
+    std::string summary = batchSummaryText(rows);
+    if (!a.quiet && !a.json && !a.dryRun) std::cout << "\n" << summary;
+    int code = batchExitCode(rows);
+    if (a.dryRun) {
+        if (a.json) std::cout << batchJson(a, rows);
+        return code;
+    }
+    // The root carries the aggregate; every model's own report.txt was written
+    // by its run, inside its own directory.
+    std::error_code ec;
+    std::filesystem::create_directories(a.output, ec);
+    if (ec) {
+        std::cerr << "uvremap: cannot create batch root: " << ec.message() << "\n";
+        return code ? code : 6;
+    }
+    {
+        std::ofstream rf(std::filesystem::path(a.output) / "batch_report.txt");
+        rf << "uvremap " UVREMAP_VERSION "\n\nBatch root: " << a.output
+           << "\nAtlas mode:  " << a.atlasMode << "\n\n"
+           << summary;
+    }
+    if (a.json) {
+        std::string j = batchJson(a, rows);
+        std::ofstream jf(std::filesystem::path(a.output) / "batch_report.json");
+        jf << j;
+        std::cout << j;
+    } else if (a.quiet) {
+        // --quiet stays silent on stdout even in a batch.
+    }
+    return code;
+}
+
 int cmdRegenerate(const Args& a) {
     RegenOptions o;
     o.output = a.output;
     if (o.output.empty()) o.output = a.input + "_remapped";
+    if (a.positional.size() > 1 && a.output.empty()) {
+        std::cerr << "a batch needs --output as its root: each model publishes into "
+                     "<output>/<name>\n";
+        return 2;
+    }
     if (a.atlasMode.empty()) {
         std::cerr << "regenerate requires --atlas-mode material|mesh|scene\n";
         return 2;
@@ -489,24 +726,16 @@ int cmdRegenerate(const Args& a) {
     o.verbose = a.verbose;
     o.quiet = a.quiet;
 
+    if (a.positional.size() > 1) return cmdRegenerateBatch(a, o);
+
     if (!a.quiet && !a.json)
         std::cout << "uvremap " UVREMAP_VERSION << "\n\nInput:       " << a.input
                   << "\nOutput:      " << o.output << "\nAtlas mode:  " << a.atlasMode
                   << "\n\n";
 
-    auto step = [&](int n, const std::string& name, bool ok) {
-        if (a.quiet) return;
-        std::ostringstream os;
-        os << "[" << n << "/5] " << name;
-        std::string s = os.str();
-        std::cout << s << std::string(std::max(0, 32 - int(s.size())), '.') << (ok ? " OK\n"
-                                                                                    : " FAIL\n");
-        std::cout.flush();
-    };
-
     o.progress = [&](int n, const std::string& name, bool ok) {
         if (a.quiet || a.dryRun || a.json) return;
-        step(n, name, ok);
+        printStep(n, name, ok);
     };
     RegenResult r = runRegenerate(a.input, o);
     if (!a.json && !r.message.empty()) std::cout << r.message;
@@ -551,18 +780,34 @@ int run(int argc, char** argv) {
     if (a.command == "version") return cmdVersion();
     if (a.command == "regenerate") return cmdRegenerate(a);
 
-    LoadResult L = loadInput(a.input);
-    if (L.code != 0) {
-        std::cerr << "uvremap: failed to load " << a.input << ": " << L.err << "\n";
-        return 3;
+    int (*cmd)(LoadResult&, const Args&) = nullptr;
+    if (a.command == "scan") cmd = cmdScan;
+    else if (a.command == "inspect") cmd = cmdInspect;
+    else if (a.command == "preview") cmd = cmdPreview;
+    if (!cmd) {
+        std::cerr << "uvremap: unknown command: " << a.command << "\n";
+        printUsage(std::cerr);
+        return 2;
     }
-    if (a.command == "scan") return cmdScan(L, a);
-    if (a.command == "inspect") return cmdInspect(L, a);
-    if (a.command == "preview") return cmdPreview(L, a);
-
-    std::cerr << "uvremap: unknown command: " << a.command << "\n";
-    printUsage(std::cerr);
-    return 2;
+    // The diagnostic commands print one model at a time, so a batch of them is
+    // the same loop; a file that will not load is reported and the rest go on.
+    int worst = 0;
+    std::vector<std::string> taken;
+    for (const std::string& input : a.positional) {
+        Args one = a;
+        one.input = input;
+        if (a.positional.size() > 1 && !a.output.empty())
+            one.output = batchMemberDir(a.output, input, taken);
+        if (a.positional.size() > 1 && !a.quiet) std::cout << "=== " << input << "\n";
+        LoadResult L = loadInput(input);
+        if (L.code != 0) {
+            std::cerr << "uvremap: failed to load " << input << ": " << L.err << "\n";
+            worst = std::max(worst, L.code);
+            continue;
+        }
+        worst = std::max(worst, cmd(L, one));
+    }
+    return worst;
 }
 }  // namespace
 
