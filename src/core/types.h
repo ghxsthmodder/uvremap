@@ -169,4 +169,16 @@ struct AtlasOutput {
     std::vector<BakedImage> baked;            // baked images per material+type
 };
 
+// How much of one generated atlas the charts actually use. coverage is the
+// packed footprint over the whole atlas (pages included); texelsPerUnit is the
+// linear density it implies, comparable with --texels-per-unit.
+struct AtlasUsage {
+    std::string name;
+    int width = 0, height = 0;  // one page
+    int pages = 1;
+    double coverage = 0.0;      // 0..1
+    double texelsPerUnit = 0.0;
+    double surfaceArea = 0.0;   // model units squared
+};
+
 }  // namespace uvremap

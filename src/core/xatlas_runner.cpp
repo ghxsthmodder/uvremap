@@ -271,4 +271,48 @@ bool generateAtlas(const Model& model, const AtlasGroup& group, int sourceUv,
     return true;
 }
 
+AtlasUsage measureAtlasUsage(const Model& model, const AtlasGroup& group, const AtlasGen& gen) {
+    AtlasUsage u;
+    u.name = group.name;
+    u.width = gen.width;
+    u.height = gen.height;
+    u.pages = std::max(1, gen.pageCount);
+    double texelArea = 0.0, area3d = 0.0;
+    for (const GenMesh& gm : gen.meshes) {
+        if (gm.primId < 0 || size_t(gm.primId) >= model.primitives.size()) continue;
+        const Primitive& prim = model.primitives[gm.primId];
+        for (size_t f = 0; f + 2 < gm.indices.size(); f += 3) {
+            const GenVertex* gv[3];
+            for (int c = 0; c < 3; c++) {
+                uint32_t i = gm.indices[f + c];
+                gv[c] = i < gm.vertices.size() ? &gm.vertices[i] : nullptr;
+            }
+            if (!gv[0] || !gv[1] || !gv[2]) continue;
+            if (gv[0]->atlasIndex < 0 || gv[1]->atlasIndex < 0 || gv[2]->atlasIndex < 0) continue;
+            if (gv[0]->xref >= prim.vertices.size() || gv[1]->xref >= prim.vertices.size() ||
+                gv[2]->xref >= prim.vertices.size())
+                continue;
+            const V3& p0 = prim.vertices[gv[0]->xref].position;
+            const V3& p1 = prim.vertices[gv[1]->xref].position;
+            const V3& p2 = prim.vertices[gv[2]->xref].position;
+            double ax = p1.x - p0.x, ay = p1.y - p0.y, az = p1.z - p0.z;
+            double bx = p2.x - p0.x, by = p2.y - p0.y, bz = p2.z - p0.z;
+            double cx = ay * bz - az * by, cy = az * bx - ax * bz, cz = ax * by - ay * bx;
+            double tri3 = 0.5 * std::sqrt(cx * cx + cy * cy + cz * cz);
+            if (!(tri3 > 0.0)) continue;  // degenerate or NaN
+            double au = double(gv[1]->u) - gv[0]->u, av = double(gv[1]->v) - gv[0]->v;
+            double bu = double(gv[2]->u) - gv[0]->u, bv = double(gv[2]->v) - gv[0]->v;
+            double triTexel = 0.5 * std::fabs(au * bv - bu * av);
+            if (!(triTexel > 0.0)) continue;
+            texelArea += triTexel;
+            area3d += tri3;
+        }
+    }
+    double capacity = double(u.width) * double(u.height) * double(u.pages);
+    if (capacity > 0.0) u.coverage = texelArea / capacity;
+    u.surfaceArea = area3d;
+    if (area3d > 0.0) u.texelsPerUnit = std::sqrt(texelArea / area3d);
+    return u;
+}
+
 }  // namespace uvremap

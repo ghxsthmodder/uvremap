@@ -1014,10 +1014,59 @@ static void testSamplerWrapLoad() {
     CHECK(m.tex[int(TexType::Emissive)].wrapS == Wrap::Mirror);
 }
 
+static void testAtlasUsage() {
+    // A 1x1 quad occupying a 50x50 corner of a 100x100 page: 2500 of 10000
+    // texels, so 25% of the atlas and 50 texels per unit of surface.
+    Model model = makeQuadModel();
+    AtlasGroup group;
+    group.id = 0;
+    group.name = "synthetic";
+    group.primitives = {0};
+    AtlasGen gen;
+    gen.width = gen.height = 100;
+    gen.pageCount = 1;
+    GenMesh gm;
+    gm.primId = 0;
+    const float au[4] = {0.f, 50.f, 50.f, 0.f};
+    const float av[4] = {0.f, 0.f, 50.f, 50.f};
+    for (int c = 0; c < 4; c++) {
+        GenVertex gv;
+        gv.u = au[c];
+        gv.v = av[c];
+        gv.atlasIndex = 0;
+        gv.xref = uint32_t(c);
+        gm.vertices.push_back(gv);
+    }
+    gm.indices = {0, 1, 2, 0, 2, 3};
+    gen.meshes.push_back(gm);
+
+    AtlasUsage use = measureAtlasUsage(model, group, gen);
+    CHECK(use.pages == 1);
+    CHECK(use.coverage == 0.25);
+    CHECK(use.surfaceArea == 1.0);
+    CHECK(use.texelsPerUnit == 50.0);
+
+    // Vertices xatlas left off every page bake nothing, so they hold no
+    // footprint and must not be counted as coverage.
+    gen.meshes[0].vertices[2].atlasIndex = -1;
+    AtlasUsage hole = measureAtlasUsage(model, group, gen);
+    CHECK(hole.coverage == 0.0);
+    CHECK(hole.texelsPerUnit == 0.0);
+    CHECK(hole.surfaceArea == 0.0);
+}
+
 static void testRenderJson() {
     Report rep;
     rep.stats.primitivesTotal = 3;
     rep.stats.atlasCount = 2;
+    AtlasUsage use;
+    use.name = "scene_0";
+    use.width = use.height = 2048;
+    use.pages = 2;
+    use.coverage = 0.303539;
+    use.texelsPerUnit = 383.0;
+    use.surfaceArea = 17.35;
+    rep.usages.push_back(use);
 
     rep.warn("quote\" and newline\n");
     rep.info("plain");
@@ -1033,6 +1082,15 @@ static void testRenderJson() {
     CHECK(j.find("\\\"") != std::string::npos);   // escaped quote
     CHECK(j.find("\\n") != std::string::npos);    // escaped newline
     CHECK(j.find("\"atlasMode\": \"per-material\"") != std::string::npos);
+    CHECK(j.find("\"atlasUsage\": [") != std::string::npos);
+    CHECK(j.find("\"name\": \"scene_0\"") != std::string::npos);
+    CHECK(j.find("\"coverage\": 0.303539") != std::string::npos);
+    CHECK(j.find("\"texelsPerUnit\": 383") != std::string::npos);
+    CHECK(j.find("\"pages\": 2") != std::string::npos);
+    Report empty;
+    CHECK(empty.renderJson(meta).find("\"atlasUsage\": [],") != std::string::npos);
+    CHECK(rep.renderText("").find("scene_0: 2048x2048 x2 page(s)") != std::string::npos);
+    CHECK(rep.renderText("").find("30.4% covered") != std::string::npos);
 }
 
 int main() {
@@ -1055,6 +1113,7 @@ int main() {
     testPreviewRenderers();
     testExtTexCoordDetection();
     testSamplerWrapLoad();
+    testAtlasUsage();
     testRenderJson();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);

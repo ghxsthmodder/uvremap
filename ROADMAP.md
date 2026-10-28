@@ -241,6 +241,19 @@ ficam para a `0.2.x` (ver M6).
    sobrava em preenchimento neutro, ou seja, o bake não tinha buracos — a métrica
    é que estava errada.
 3. **Ocupação e densidade de texels no relatório** (`report.txt` + `--json`).
+   ✔ Concluído: `measureAtlasUsage()` soma a área no atlas de cada triângulo
+   empacotado (descartando os que o xatlas deixou fora de qualquer página e os
+   degenerados) e publica, por atlas, `coverage` (fraction do quadro ocupada),
+   `texelsPerUnit` (`sqrt(área_em_texels / área_3D)`, comparável com o pedido),
+   `surfaceArea` e as páginas. Sai na seção *Atlas usage* do `report.txt` e no
+   vetor `atlasUsage` do `report.json`; o `absorb()` do `Report` não mistura as
+   entradas porque a medição é feita no laço sequencial de geração, em ordem de
+   grupo. Confiabilidade medida: `DamagedHelmet` com `--texels-per-unit 400`
+   reporta 402,2 e `--resolution` fixa 2048 reporta 383,0 (dois atlas de 1024
+   fariam o mesmo por página). Unit tests `testAtlasUsage` (quadriculado
+   sintético: 25% de ocupação, 50 texels/unidade, vértice sem página não conta)
+   e o `testRenderJson` estendido; golden novo: `json: atlasUsage occupancy +
+   density` e `report.txt: atlas usage line`.
 4. **`--fail-under N`** — exit code quando a concordância do self-check cai
    abaixo do piso.
 5. **`--jobs N`** — tamanho do pool de threads do bake.

@@ -205,6 +205,7 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
         rep.stats.atlasCount++;
         rep.stats.atlasWidth = gens[gi].width;
         rep.stats.atlasHeight = gens[gi].height * std::max(1, gens[gi].pageCount);
+        rep.usages.push_back(measureAtlasUsage(model, groups[gi], gens[gi]));
     }
     progress(3, "Generating UV atlas", true);
 

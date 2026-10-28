@@ -271,9 +271,10 @@ autorização explícita.
   `--json`                            Escreve `report.json` no diretório
                                       de saída e imprime o relatório
                                       final em JSON na saída padrão
-                                      (stats, avisos, informações e
-                                      erros) em vez do resumo legível,
-                                      para integração em pipelines.
+                                      (stats, uso dos atlas, avisos,
+                                      informações e erros) em vez do
+                                      resumo legível, para integração em
+                                      pipelines.
 
   `--force`                           Autoriza a sobrescrita de arquivos
                                       existentes no destino.
@@ -285,6 +286,17 @@ autorização explícita.
 
 Os índices de `--source-uv` e `--target-uv` correspondem aos conjuntos
 `TEXCOORD_n` do glTF; não são índices de materiais ou texturas.
+
+Todo atlas produzido entra na seção *Atlas usage* do `report.txt` e no
+vetor `atlasUsage` do `report.json`, com o tamanho da página, o número de
+páginas, a fração do atlas que as ilhas ocupam (`coverage`), a densidade
+de texels que essa ocupação implica (`texelsPerUnit`, diretamente
+comparável com o `--texels-per-unit` pedido) e a área de superfície
+mapeada (`surfaceArea`, em unidades do modelo). Servem para julgar a
+resolução escolhida: um `coverage` perto de 1,0 indica atlas cheio e risco
+de página extra, um `coverage` baixo indica resolução maior do que a
+geometria pede, e o `texelsPerUnit` mede a nitidez real que sobrou depois
+do empacotamento.
 
 ### Estratégias de atlas: `--atlas-mode`
 

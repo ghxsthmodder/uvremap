@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+#include "core/types.h"
+
 namespace uvremap {
 
 enum class ExitCode {
@@ -51,6 +53,8 @@ class Report {
     int warningCount() const { return int(warnings_.size()); }
 
     Stats stats;
+    // One entry per generated atlas, filled by the regenerate stage.
+    std::vector<AtlasUsage> usages;
 
     std::string renderText(const std::string& header) const;
     std::string renderJson(const ReportMeta& meta) const;

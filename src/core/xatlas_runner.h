@@ -81,4 +81,9 @@ bool generateAtlas(const Model& model, const AtlasGroup& group, int sourceUv,
                    const GenOptions& opt, AtlasGen& out, Report& report,
                    std::string& err);
 
+// Measures the packed footprint of a generated atlas: the sum of the atlas
+// triangles' areas over the atlas capacity, and the texel density that
+// footprint implies against the surface they map from.
+AtlasUsage measureAtlasUsage(const Model& model, const AtlasGroup& group, const AtlasGen& gen);
+
 }  // namespace uvremap

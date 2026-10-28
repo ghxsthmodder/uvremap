@@ -208,6 +208,25 @@ assert d['tool'] == 'uvremap' and 'stats' in d
 assert isinstance(d['warnings'], list) and 'warningCount' in d
 PY
 then ok "json: report.json parses"; else bad "json: report.json parses"; fi
+# M5.3: every atlas publishes how much of it the charts use and the texel
+# density that footprint implies.
+if python3 - "$WORK/jsonout/report.json" <<'PY'
+import json, sys
+u = json.load(open(sys.argv[1]))['atlasUsage']
+assert u, 'no atlasUsage entries'
+for x in u:
+    assert x['width'] > 0 and x['height'] > 0 and x['pages'] >= 1
+    assert 0.0 < x['coverage'] <= 1.0
+    assert x['texelsPerUnit'] > 0.0 and x['surfaceArea'] > 0.0
+PY
+then ok "json: atlasUsage occupancy + density"; else bad "json: atlasUsage occupancy + density"; fi
+if grep -q 'Atlas usage:' "$WORK/jsonout/report.txt" &&
+   grep -Eq 'scene_0: [0-9]+x[0-9]+ x[0-9]+ page\(s\), [0-9.]+% covered, [0-9.]+ texels per unit' \
+       "$WORK/jsonout/report.txt"; then
+    ok "report.txt: atlas usage line"
+else
+    bad "report.txt: atlas usage line"
+fi
 if python3 - "$WORK/stdout" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
