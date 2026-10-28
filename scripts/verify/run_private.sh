@@ -69,6 +69,18 @@ EOF
     python3 -c "import sys; sys.exit(0 if float('$BC') >= 0.95 else 1)" \
         && ok "self-check basecolor agreement $BC" \
         || bad "self-check basecolor agreement $BC (<0.95)"
+
+    # M4.5: with --bake-factors every island carries its material's value, so
+    # no basecolor sample may be left with nothing to compare. That was the
+    # black-chart regression: materials whose factor was already the spec
+    # default got the atlas assigned and neutralized without any paint under
+    # their islands.
+    if grep -q "basecolor:.*no value to compare" "$OUT/report.txt"; then
+        bad "self-check: basecolor islands without painted value"
+        grep "basecolor:" "$OUT/report.txt" | sed 's/^/      /'
+    else
+        ok "self-check: every basecolor sample comparable"
+    fi
 fi
 
 echo

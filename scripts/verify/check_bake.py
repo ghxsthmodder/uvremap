@@ -116,7 +116,11 @@ def tex_transforms(p):
         pbr = m.get('pbrMetallicRoughness') or {}
         bt = pbr.get('baseColorTexture')
         factor = pbr.get('baseColorFactor')
-        if not bt and not factor:
+        if not bt:
+            # A material with no texture and no baseColorFactor still has the
+            # spec default white, which --bake-factors paints into the atlas.
+            out.setdefault(m.get('name', ''), []).append(
+                dict(factor=factor if factor is not None else [1.0, 1.0, 1.0, 1.0]))
             continue
         if bt:
             kt = (bt.get('extensions') or {}).get('KHR_texture_transform', {})

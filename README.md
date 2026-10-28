@@ -206,13 +206,35 @@ autorização explícita.
                                       usam imagens por material de qualquer
                                       forma.
 
+  `--bake-factors`                    Transfere os fatores numéricos do
+                                      material para as texturas
+                                      reconstruídas nos canais em que não há
+                                      imagem de origem: `baseColorFactor`,
+                                      `metallicFactor`/`roughnessFactor` e
+                                      `emissiveFactor`. A força de oclusão
+                                      não é dobrada: sem imagem de
+                                      oclusão não há o que modular, e
+                                      criá-la mudaria o sombreado. O fator
+                                      neutralizado passa a existir apenas na
+                                      textura, de modo que cada ilha do
+                                      atlas carrega a aparência completa do
+                                      seu material. Nos canais de cor e de
+                                      metálico/aspereza até o valor padrão
+                                      da especificação é pintado, para que
+                                      nenhuma ilha fique no preenchimento
+                                      neutro do atlas; emissivo nulo
+                                      continua sem imagem.
+
   `--self-check N`                    Amostra N pontos aleatórios por
                                       imagem reconstruída e confere a
                                       concordância com a textura de origem
                                       (percentuais no `report.txt`; mapas
                                       de normal são pulados, pois o rebake
                                       em quadro tangente não é comparável
-                                      texel a texel).
+                                      texel a texel). Sem `--bake-factors`
+                                      os canais cujo valor ficou apenas no
+                                      material são excluídos da contagem,
+                                      pois não há o que comparar.
 
   `--format FORMAT`                   Formato do modelo de saída: `gltf`
                                       ou `glb`.

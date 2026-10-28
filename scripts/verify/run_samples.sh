@@ -282,7 +282,9 @@ import json, sys
 j = json.load(open(sys.argv[1]))
 mats = j['materials']
 n = len([m for m in mats if m['pbrMetallicRoughness'].get('baseColorTexture')])
-assert n >= 2, f'only {n} cloned materials have baseColorTexture'
+# every material of the model is texture-less, so with --bake-factors all of
+# them must move their color into the atlas, the default-white one included
+assert n == len(mats), f'{n} of {len(mats)} cloned materials have baseColorTexture'
 for m in mats:
     pbr = m['pbrMetallicRoughness']
     if pbr.get('baseColorTexture'):
@@ -304,6 +306,25 @@ EOF
         ok "bake-factors ($variant): painted colors match factors"
     else
         bad "bake-factors ($variant): painted colors match factors"
+    fi
+    # M4.5: the material whose factors are all spec defaults must still have
+    # its white painted; before, only non-neutral factors were folded and its
+    # islands stayed on the atlas' neutral transparent fill.
+    if python3 - "$WORK/factor-$variant/textures" <<'EOF'
+import glob, sys
+import numpy as np
+from PIL import Image
+hits = 0
+for f in glob.glob(sys.argv[1] + '/*_basecolor*.png'):
+    a = np.array(Image.open(f).convert('RGBA'))
+    hits += int(((a[..., 0] > 250) & (a[..., 1] > 250) &
+                 (a[..., 2] > 250) & (a[..., 3] > 250)).sum())
+assert hits > 1000, f'default factor painted on {hits} texels'
+EOF
+    then
+        ok "bake-factors ($variant): spec-default factor painted too"
+    else
+        bad "bake-factors ($variant): spec-default factor missing from the atlas"
     fi
 done
 

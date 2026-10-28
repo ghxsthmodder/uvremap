@@ -1075,12 +1075,14 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
         const AtlasOutput& ao = atlases[ai];
         // Baked textures: per (material, type) with a (shared, type) fallback.
         std::map<std::pair<int, int>, int> texByMatType;  // (material|-1, TexType) -> texture
-        std::map<std::pair<int, int>, int> bitsByMatType;  // factor-baked bits
+        // Original material -> baked image that painted its factor for a type.
+        std::map<std::pair<int, int>, int> factorTexByMatType;
         for (const BakedImage& bi : ao.baked) {
             int texIdx = addBakedImage(ao, bi);
             if (texIdx < 0) return false;
             texByMatType[{bi.material, int(bi.type)}] = texIdx;
-            bitsByMatType[{bi.material, int(bi.type)}] = bi.factorBaked;
+            for (int fm : bi.factorMaterials)
+                factorTexByMatType.try_emplace(std::make_pair(fm, int(bi.type)), texIdx);
             report.stats.textureMapsBaked++;
         }
         for (int oldMat : ao.materialIds) {
@@ -1092,14 +1094,23 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
                 const TextureRef& coreRef = core.materials[oldMat].tex[int(t)];
                 bool factorOnly = !coreRef.present;
                 if (!factorOnly && !textureBakeable(core, oldMat, t)) return;  // keep slot as-is
-                auto it = texByMatType.find({oldMat, int(t)});
-                if (it == texByMatType.end()) it = texByMatType.find({-1, int(t)});
-                if (it == texByMatType.end()) return;
-                auto bit = bitsByMatType.find(it->first);
-                if (factorOnly && !(bit->second & factorBit(t)))
-                    return;  // no texture here and the factor was not painted in
-                if (factorOnly) bakedFactors |= factorBit(t);
-                slotRef.index = it->second;
+                int img = -1;
+                if (factorOnly) {
+                    // A texture-less slot may only point at an image that stamped
+                    // this material's factor: the neutral fill waiting under an
+                    // island that contributed nothing would black the material
+                    // out as soon as its factor is neutralized.
+                    auto fm = factorTexByMatType.find({oldMat, int(t)});
+                    if (fm == factorTexByMatType.end()) return;
+                    img = fm->second;
+                    bakedFactors |= factorBit(t);
+                } else {
+                    auto it = texByMatType.find({oldMat, int(t)});
+                    if (it == texByMatType.end()) it = texByMatType.find({-1, int(t)});
+                    if (it == texByMatType.end()) return;
+                    img = it->second;
+                }
+                slotRef.index = img;
                 slotRef.texCoord = opt.targetUv;
                 slotRef.extensions.erase("KHR_texture_transform");
             };

@@ -87,10 +87,12 @@ regenerate/preview options:
       --target-uv INDEX        target TEXCOORD set (default 0)
       --texture-filter MODE    nearest | linear (default linear)
       --bake-factors           fold material factors (baseColorFactor,
-                               metallicRoughnessFactor, emissiveFactor,
-                               occlusionStrength) into rebuilt textures for
-                               slots that have no image; the neutralized
-                               factor then lives in the texture only
+                               metallicFactor/roughnessFactor,
+                               emissiveFactor) into rebuilt textures for
+                               slots that have no image, so every atlas
+                               island carries its material's appearance; the
+                               neutralized factor then lives in the texture
+                               only
       --split-materials        emit one baked image per material instead of a
                                single shared image per texture type; forces the
                                pre-0.1 layout (needed for variants anyway)

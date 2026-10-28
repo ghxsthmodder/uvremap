@@ -138,12 +138,17 @@ struct RemeshedPrimitive {
 // factorBaked has bit kTexCount+slot set when the material's numeric factor for
 // that slot (baseColorFactor, metallicRoughnessFactor, occlusionStrength,
 // emissiveFactor) was painted into the image instead of sampled from a texture;
-// the exporter must then neutralize that factor on the cloned material.
+// the exporter must then neutralize that factor on the cloned material. For a
+// shared image factorBaked is the union over its materials, so
+// factorMaterials lists the originals whose factor of this image's type was
+// actually painted: a material missing from it keeps its factor on the model
+// instead of sampling an island that was never written.
 struct BakedImage {
     int material = -1;
     TexType type = TexType::BaseColor;
     Image image;
     int factorBaked = 0;
+    std::vector<int> factorMaterials;
 };
 
 // Output of one atlas group.

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Write a synthetic two-prim glTF whose materials use factors only (no images).
+"""Write a synthetic three-prim glTF whose materials use factors only (no images).
 
 Usage: make_factor_model.py <output.gltf>
 Prim A: linear baseColorFactor [0.8,0.05,0.05,1]; Prim B: [0.05,0.8,0.05,1]
-plus metallic/roughness, emissive and occlusion-strength factors. Each prim is
+plus metallic/roughness, emissive and occlusion-strength factors; Prim C: every
+factor at the glTF default, so the atlas must carry its white too. Each prim is
 a UV-covered quad sharing geometry layout (separate copies, distinct materials).
 """
 import json
@@ -54,22 +55,25 @@ def build():
          'pbrMetallicRoughness': {'baseColorFactor': [0.05, 0.8, 0.05, 1.0],
                                   'metallicFactor': 0.25, 'roughnessFactor': 0.4},
          'emissiveFactor': [0.0, 0.2, 0.0]},
+        {'name': 'FactorWhite', 'doubleSided': True,
+         'pbrMetallicRoughness': {}},
     ]
     # occlusion strength needs an occlusionTexture entry to exist in glTF, so
     # material 1 also gets the extension-free default; strength is expressed
     # via KHR_materials_* is not applicable — keep the three core factors.
 
     prims = []
-    for m in (0, 1):
+    for m in (0, 1, 2):
         prims.append({'attributes': dict(attrs), 'indices': 2, 'material': m, 'mode': 4})
 
     gltf = {
         'asset': {'version': '2.0'},
         'scene': 0,
-        'scenes': [{'nodes': [0, 1]}],
-        'nodes': [{'mesh': 0}, {'mesh': 1}],
+        'scenes': [{'nodes': [0, 1, 2]}],
+        'nodes': [{'mesh': 0}, {'mesh': 1}, {'mesh': 2}],
         'meshes': [{'name': 'quadA', 'primitives': [prims[0]]},
-                   {'name': 'quadB', 'primitives': [prims[1]]}],
+                   {'name': 'quadB', 'primitives': [prims[1]]},
+                   {'name': 'quadC', 'primitives': [prims[2]]}],
         'materials': materials,
         'accessors': accessors,
         'bufferViews': [bv_pos, bv_uv, bv_idx],

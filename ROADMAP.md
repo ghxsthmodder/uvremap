@@ -1,10 +1,10 @@
 # Roadmap — uvremap pós-v0.1.4
 
-Estado: Fases 1–4 do README implementadas e verificados (golden 300/300, releases
+Estado: Fases 1–4 do README implementadas e verificados (golden 302/302, releases
 v0.1.0–v0.1.8 com windows-x64 / linux-x86_64 / linux-aarch64 / android-arm64).
 M0 concluído (v0.1.3); M1 concluído (v0.1.5); M2 concluído (multi-página e
-não-quadrado; v0.1.5 + pending); M3 concluído (itens 1–4); M4 itens 1–3
-concluídos (item 1 na v0.1.8, itens 2–3 a lançar; item 4 aberto). Prioridades abaixo
+não-quadrado; v0.1.5 + pending); M3 concluído (itens 1–4); M4 itens 1–5
+concluídos (item 1 na v0.1.8, itens 2–5 a lançar). Prioridades abaixo
 por impacto e risco.
 
 ## Política de versionamento
@@ -175,9 +175,30 @@ concluídos (ver abaixo), a lançar. M1 completo.
    testar o MF188 de `/root/visual_mods/mf188`: basecolor 2/86 (2,3%) porque o
    verificador espera que o atlas reproduza a aparência completa, enquanto os
    fatores que ficaram no material (não dobrados em textura) não devem ser
-   comparados texel a texel. Plano: o amostrador deve levar o fator em conta
-   (ou pular amostras de slots sem textura de origem) e reportar quantas
-   amostras foi capaz de usar.
+   comparados texel a texel.
+   ✔ Concluído: o amostrador só compara quando há valor de origem (textura
+   decodificada, ou fator dobrado com `--bake-factors`); as amostras sem
+   comparação saem da contagem e aparecem na linha do relatório como "N
+   sample(s) had no value to compare" — que é justamente o alarme para ilha
+   sem pintura (item 5).
+
+5. **Ilha sem cor no atlas compartilhado (`--bake-factors`)** — relatado no
+   MF188 de `/root/visual_mods/mf188`: "a cor não foi transferida para o atlas
+   em formato de ilha, continua no modelo". Quinze dos dezoito materiais não
+   têm `baseColorTexture` (a cor é só o fator). Fatores não neutros eram
+   pintados, mas os de fator branco padrão (1,1,1,1) não — e como a imagem
+   compartilhada publicava os bits *unidos* de todos os materiais, o export
+   atribuía o atlas a eles e neutralizava o fator mesmo sem tinta: ilhas
+   pretas sobre o preenchimento neutro, com 5% do atlas pintado.
+   ✔ Concluído: basecolor e metallic-roughness pintam também o valor padrão da
+   spec, então toda ilha carrega a aparência do seu material; a imagem
+   compartilhada lista em `BakedImage::factorMaterials` os materiais cujo fator
+   ela realmente contém e o export só atribui o slot a quem foi pintado (os
+   bits unidos deixam de decidir). MF188: cobertura do basecolor 5% → 35%,
+   buracos por material < 0,2% (sobram só os alphas das texturas de `cam` e
+   `ibreler`), self-check basecolor 399/400. Unit test `testNeutralIslandBake`,
+   guardas no contador de amostras sem comparação (golden 302/302, privado
+   8/8) e terceiro material sem fator nenhum em `make_factor_model.py`.
 
 ## Infra recorrente (a cada release)
 

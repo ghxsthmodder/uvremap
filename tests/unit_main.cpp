@@ -454,11 +454,16 @@ static void testBakeFactors() {
     CHECK(basecolorCopies == 2);
     // occlusion strength is not folded when no occlusion texture exists
     CHECK(occlCopies == 0);
-    // metallicRoughness folds only the material with non-default factors
-    int mrCopies = 0;
-    for (const BakedImage& b : baked)
+    // basecolor and metallic-roughness paint every texture-less island, the
+    // spec defaults included, so no island is left on the raster's neutral
+    // fill; emissive stays with the material that actually emits.
+    int mrCopies = 0, emCopies = 0;
+    for (const BakedImage& b : baked) {
         if (b.type == TexType::MetallicRoughness) mrCopies++;
-    CHECK(mrCopies == 1);
+        if (b.type == TexType::Emissive) emCopies++;
+    }
+    CHECK(mrCopies == 2);
+    CHECK(emCopies == 1);
 }
 
 static void testSharedFactorBake() {
@@ -507,6 +512,7 @@ static void testSharedFactorBake() {
         bc++;
         CHECK(b.material == -1);
         CHECK(b.factorBaked & factorBit(TexType::BaseColor));
+        CHECK(b.factorMaterials.size() == 2);
         Raster sc;
         const std::vector<uint8_t>& rgba = bakedRgba(b, sc);
         for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
@@ -529,6 +535,66 @@ static void testSharedFactorBake() {
         CHECK(b.material >= 0);
     }
     CHECK(sbc == 2);
+}
+
+static void testNeutralIslandBake() {
+    // Reported defect: a texture-less material whose only color is the default
+    // baseColorFactor (1,1,1,1) owned atlas islands that --bake-factors left
+    // on the neutral transparent fill, so its color never reached the atlas.
+    // The neutral value must be painted and the material listed among the
+    // shared image's factor materials.
+    Model model = makeQuadModel();
+    Primitive p2 = model.primitives[0];
+    for (auto& v : p2.vertices) v.position.x += 2.f;
+    p2.primIndex = 1;
+    p2.meshIndex = 1;
+    p2.material = 1;
+    model.primitives.push_back(std::move(p2));
+    model.materials.clear();
+    Material m0;
+    m0.name = "red";
+    m0.baseColorFactor = {0.8f, 0.05f, 0.05f, 1.f};
+    Material m1;  // every factor at the glTF default
+    m1.name = "white";
+    model.materials = {m0, m1};
+
+    AtlasGroup group;
+    group.id = 0;
+    group.name = "t";
+    group.primitives = {0, 1};
+    group.materials = {0, 1};
+
+    Report rep;
+    std::string err;
+    GenOptions go;
+    go.resolutionW = go.resolutionH = 64;
+    go.padding = 1;
+    AtlasGen gen;
+    CHECK(generateAtlas(model, group, 0, go, gen, rep, err));
+
+    BakeOptions bo;
+    bo.filter = Filter::Nearest;
+    bo.bakeFactors = true;
+    std::vector<BakedImage> baked;
+    CHECK(bakeGroup(model, group, gen, bo, baked, rep, err));
+
+    const BakedImage* bc = nullptr;
+    for (const BakedImage& b : baked)
+        if (b.type == TexType::BaseColor) bc = &b;
+    CHECK(bc != nullptr);
+    if (!bc) return;
+    CHECK(bc->material == -1);
+    CHECK(bc->factorMaterials.size() == 2);
+    int red = 0, white = 0;
+    Raster sc;
+    const std::vector<uint8_t>& rgba = bakedRgba(*bc, sc);
+    for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
+        if (rgba[i + 3] == 0) continue;
+        if (rgba[i] > 180 && rgba[i + 1] < 70) red++;
+        else if (rgba[i] > 240 && rgba[i + 1] > 240 && rgba[i + 2] > 240) white++;
+    }
+    CHECK(red > 0);
+    CHECK(white >= red / 2);
 }
 
 static void testMultiPageAtlas() {
@@ -820,6 +886,7 @@ int main() {
     testMaterialsVariantsBake();
     testBakeFactors();
     testSharedFactorBake();
+    testNeutralIslandBake();
     testMultiPageAtlas();
     testNonSquareAtlas();
     testSelfCheck();

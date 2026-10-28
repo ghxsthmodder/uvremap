@@ -40,25 +40,38 @@ uint8_t directToByte(double c) { return uint8_t(std::clamp(c, 0.0, 1.0) * 255.0 
 
 bool nearly(float a, float b) { return std::fabs(a - b) < 1e-4f; }
 
-// Fill value for the slot, or false when the factor is neutral (nothing to bake).
-bool factorTexel(const Material& m, TexType t, uint8_t out[4]) {
+// A texture-less slot whose island must carry its material's value even when
+// that value is the glTF default: the shared raster fills with transparent
+// black (basecolor) and roughness 0 (metallic-roughness), so leaving the
+// default material unpainted would punch a hole in the rebuilt atlas. Not
+// emissive or occlusion: painting their defaults would create a map for a
+// material that never had one.
+bool identityPaintSlot(TexType t) {
+    return t == TexType::BaseColor || t == TexType::MetallicRoughness;
+}
+
+// Fill value for a texture-less slot, or false when there is nothing to bake:
+// either the factor is neutral and paintNeutral is off, or the slot has no
+// foldable factor at all.
+bool factorTexel(const Material& m, TexType t, uint8_t out[4], bool paintNeutral) {
     switch (t) {
         case TexType::BaseColor: {
             const V4& f = m.baseColorFactor;
-            if (nearly(f.r, 1) && nearly(f.g, 1) && nearly(f.b, 1) && nearly(f.a, 1)) return false;
             out[0] = linearToByte(f.r);
             out[1] = linearToByte(f.g);
             out[2] = linearToByte(f.b);
             out[3] = directToByte(f.a);
+            if (nearly(f.r, 1) && nearly(f.g, 1) && nearly(f.b, 1) && nearly(f.a, 1))
+                return paintNeutral;
             return true;
         }
         case TexType::MetallicRoughness: {
-            // glTF spec defaults (1, 1) need no baking.
-            if (nearly(m.metallicFactor, 1) && nearly(m.roughnessFactor, 1)) return false;
             out[0] = 0;
             out[1] = directToByte(m.metallicFactor);
             out[2] = directToByte(m.roughnessFactor);
             out[3] = 255;
+            // glTF spec defaults (1, 1) need no baking.
+            if (nearly(m.metallicFactor, 1) && nearly(m.roughnessFactor, 1)) return paintNeutral;
             return true;
         }
         case TexType::Occlusion:
@@ -67,13 +80,13 @@ bool factorTexel(const Material& m, TexType t, uint8_t out[4]) {
             // the material had none would change shading.
             return false;
         case TexType::Emissive: {
-            if (nearly(m.emissiveFactor.x, 0) && nearly(m.emissiveFactor.y, 0) &&
-                nearly(m.emissiveFactor.z, 0))
-                return false;
             out[0] = linearToByte(m.emissiveFactor.x);
             out[1] = linearToByte(m.emissiveFactor.y);
             out[2] = linearToByte(m.emissiveFactor.z);
             out[3] = 255;
+            if (nearly(m.emissiveFactor.x, 0) && nearly(m.emissiveFactor.y, 0) &&
+                nearly(m.emissiveFactor.z, 0))
+                return false;
             return true;
         }
         default:
@@ -158,9 +171,11 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
     std::memset(typeNeeded, 0, sizeof(typeNeeded));
     std::map<int, std::array<bool, kTexCount>> perMatNeed;
     std::map<int, int> perMatFactorBits;
+    std::map<int, std::array<std::array<uint8_t, 4>, kTexCount>> perMatFacRgb;
     for (int mat : matIds) {
         auto& needs = perMatNeed[mat];
         needs.fill(false);
+        perMatFacRgb[mat].fill({0, 0, 0, 0});
         const Material& m = model.materials[mat];
         bool warnedDecode = false;
         for (int t = 0; t < kTexCount; t++) {
@@ -168,9 +183,10 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
             if (!ref.present) {
                 if (opt.bakeFactors) {
                     uint8_t f[4];
-                    if (factorTexel(m, TexType(t), f)) {
+                    if (factorTexel(m, TexType(t), f, identityPaintSlot(TexType(t)))) {
                         needs[t] = true;
                         perMatFactorBits[mat] |= factorBit(TexType(t));
+                        for (int c = 0; c < 4; c++) perMatFacRgb[mat][t][c] = f[c];
                     }
                 }
                 continue;
@@ -232,6 +248,11 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
     // Texel-coverage masks for factor painting on dedicated layers, keyed
     // (material, page).
     std::map<std::pair<int, int>, std::vector<uint8_t>> fillMasks;
+    // Which materials the shared layer carries a painted factor for, per slot.
+    // The exporter needs this per material: the union in the emitted
+    // factorBaked bits cannot tell an island that holds its color from one
+    // that was never stamped.
+    std::map<int, int> sharedFactorMats;
 
     int trianglesUnmapped = 0;
     int trianglesDegenerate = 0;  // zero-area faces xatlas legitimately ignores
@@ -345,8 +366,12 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                     if (perMatFactorBits[mat] & factorBit(TexType(t))) {
                         ensureLayer(layer, TexType(t));
                         target[t] = &layer;
-                        if (!perMatUsed && factorTexel(m, TexType(t), facRgb[t]))
+                        if (!perMatUsed) {
                             isFactor[t] = true;  // paint inline on the shared layer
+                            sharedFactorMats[mat] |= factorBit(TexType(t));
+                            for (int c = 0; c < 4; c++)
+                                facRgb[t][c] = perMatFacRgb[mat][t][c];
+                        }
                         anyActive = true;
                         continue;
                     }
@@ -461,8 +486,7 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
         std::vector<uint8_t>& mask = mk.second;
         for (int t = 0; t < kTexCount; t++) {
             if (!(perMatFactorBits[matKey] & factorBit(TexType(t)))) continue;
-            uint8_t fc[4];
-            if (!factorTexel(model.materials[matKey], TexType(t), fc)) continue;
+            const uint8_t* fc = perMatFacRgb[matKey][t].data();
             Raster& ls = matPage(matKey)[page][t];
             ensureLayer(ls, TexType(t));
             for (size_t i = 0; i < mask.size(); i++) {
@@ -494,7 +518,8 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
     // dozens of full-size images, and holding them decoded exhausts memory
     // on Windows (bad allocation) long before Linux's overcommit would.
     bool emitOk = true;
-    auto emit = [&](int mat, TexType t, const std::vector<Raster*>& pageLayers, int bits) {
+    auto emit = [&](int mat, TexType t, const std::vector<Raster*>& pageLayers, int bits,
+                    const std::vector<int>& facMats) {
         if (!emitOk) return;
         bool any = false;
         for (Raster* r : pageLayers)
@@ -531,7 +556,7 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
         }
         out.raw = std::move(png);
         out.decoded = false;  // out.rgba now empty; decode out.raw when needed
-        outBaked.push_back(BakedImage{mat, t, std::move(out), bits});
+        outBaked.push_back(BakedImage{mat, t, std::move(out), bits, facMats});
     };
 
     if (perMatUsed) {
@@ -541,7 +566,9 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
             for (int t = 0; t < kTexCount; t++) {
                 std::vector<Raster*> ls{size_t(pages)};
                 for (int p = 0; p < pages; p++) ls[p] = &plIt->second[p][t];
-                emit(mat, TexType(t), ls, perMatFactorBits[mat]);
+                std::vector<int> facMats;
+                if (perMatFactorBits[mat] & factorBit(TexType(t))) facMats.push_back(mat);
+                emit(mat, TexType(t), ls, perMatFactorBits[mat], facMats);
             }
         }
     }
@@ -549,9 +576,13 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
         std::vector<Raster*> ls{size_t(pages)};
         for (int p = 0; p < pages; p++) ls[p] = &sharedLayers[p][t];
         int bits = 0;
-        for (const auto& fb : perMatFactorBits)
-            if (fb.second & factorBit(TexType(t))) bits |= factorBit(TexType(t));
-        emit(-1, TexType(t), ls, bits);
+        std::vector<int> facMats;
+        for (const auto& fb : sharedFactorMats) {
+            if (!(fb.second & factorBit(TexType(t)))) continue;
+            bits |= factorBit(TexType(t));
+            facMats.push_back(fb.first);
+        }
+        emit(-1, TexType(t), ls, bits, facMats);
     }
     if (!emitOk) {
         err = "failed to encode baked texture '" + group.name + "' to PNG";
@@ -646,7 +677,7 @@ bool selfCheckGroup(const Model& model, const AtlasGroup& group, const AtlasGen&
         std::mt19937 rng(7u + size_t(b.material) * 131u + size_t(t) * 17u);
         std::uniform_int_distribution<size_t> pick(0, tris.size() - 1);
         std::uniform_real_distribution<float> urand(0.f, 1.f);
-        int ok = 0, n = 0;
+        int ok = 0, n = 0, skip = 0;
         for (int s = 0; s < nSamples; s++) {
             const Tri& tri = tris[pick(rng)];
             const GenMesh& gm = gen.meshes[tri.gmIdx];
@@ -717,12 +748,19 @@ bool selfCheckGroup(const Model& model, const AtlasGroup& group, const AtlasGen&
                 }
             } else {
                 uint8_t fc[4];
-                if (factorTexel(m, b.type, fc)) {
+                if (opt.bakeFactors && factorTexel(m, b.type, fc, identityPaintSlot(b.type))) {
                     for (int i = 0; i < 4; i++) exp[i] = fc[i];
                     have = true;
                 }
             }
-            if (!have) continue;
+            if (!have) {
+                // Nothing was expected under this texel: with --bake-factors
+                // every island carries at least its material's default value,
+                // so a non-zero count here means an atlas region was left on
+                // the neutral fill while its material's slot was reassigned.
+                skip++;
+                continue;
+            }
             n++;
             bool agree = true;
             for (int i = 0; i < 4 && agree; i++)
@@ -736,13 +774,16 @@ bool selfCheckGroup(const Model& model, const AtlasGroup& group, const AtlasGen&
             continue;
         }
         float pct = 100.f * float(ok) / float(n);
-        report.info(tag + ": " + std::to_string(ok) + "/" + std::to_string(n) + " (" +
-                    [&] {
-                        std::ostringstream os;
-                        os << std::fixed << std::setprecision(1) << pct;
-                        return os.str();
-                    }() +
-                    "%)");
+        std::string line = tag + ": " + std::to_string(ok) + "/" + std::to_string(n) + " (" +
+                           [&] {
+                               std::ostringstream os;
+                               os << std::fixed << std::setprecision(1) << pct;
+                               return os.str();
+                           }() +
+                           "%)";
+        if (skip > 0)
+            line += "; " + std::to_string(skip) + " sample(s) had no value to compare";
+        report.info(line);
         if (pct < 85.f)
             report.warn(tag + ": low agreement " + std::to_string(int(pct)) +
                         "% — texture transfer may be inaccurate");
