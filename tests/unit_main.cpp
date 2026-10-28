@@ -1,4 +1,5 @@
 // Minimal self-contained unit checks for uvremap core.
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -427,6 +428,189 @@ static void testClampWrapBake() {
     // The first column only tiles back into view when the texture repeats, so
     // the repeated atlas shows roughly twice as much blue as the clamped one.
     CHECK(repeatC[2] > clampC[2] * 3 / 2);
+}
+
+static void testSeamBandBake() {
+    // Textured charts dilate into their own gutter, so a renderer filtering
+    // across a chart edge blends the edge colour instead of the atlas' neutral
+    // fill (hairline seam). The dilated texel samples at the projection onto
+    // the chart: with a repeating texture the gutter shows the chart's own
+    // edge, never the wrapped far side.
+    // Two primitives, sized to pack side by side on one page: the second chart
+    // then has a gutter on its low-U side, where an un-projected sample of a
+    // repeating texture would show the wrapped far edge.
+    Model model;
+    model.inputPath = "synthetic";
+    const V2 uv[4] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+    for (int q = 0; q < 2; q++) {
+        Primitive p;
+        p.meshIndex = q;
+        p.primIndex = 0;
+        p.material = 0;
+        const V3 pos[4] = {{3.f * q, 0, 0}, {3.f * q + 1, 0, 0},
+                           {3.f * q + 1, 1, 0}, {3.f * q, 1, 0}};
+        for (int c = 0; c < 4; c++) {
+            SourceVertex v;
+            v.position = pos[c];
+            v.hasNormal = true;
+            v.normal = {0, 0, 1};
+            v.uvsets.push_back(uv[c]);
+            p.vertices.push_back(v);
+        }
+        p.indices = {0, 1, 2, 0, 2, 3};
+        model.primitives.push_back(std::move(p));
+    }
+
+    Image img;  // column 0 blue, column 7 green, body red
+    img.name = "stripes";
+    img.w = 8;
+    img.h = 8;
+    img.decoded = true;
+    img.rgba.assign(8 * 8 * 4, 0);
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 8; x++) {
+            uint8_t* q = &img.rgba[(y * 8 + x) * 4];
+            if (x == 0) q[2] = 255;
+            else if (x == 7) q[1] = 255;
+            else q[0] = 255;
+            q[3] = 255;
+        }
+    model.images.push_back(std::move(img));
+    Material m;
+    m.name = "m0";
+    TextureRef& ref = m.tex[int(TexType::BaseColor)];
+    ref.present = true;
+    ref.imageIndex = 0;
+    ref.texCoord = 0;
+    ref.wrapS = ref.wrapT = Wrap::Repeat;
+    model.materials.push_back(m);
+
+    AtlasGroup group;
+    group.id = 0;
+    group.name = "t";
+    group.primitives = {0, 1};
+    group.materials = {0};
+    GenOptions go;
+    go.resolutionW = go.resolutionH = 128;
+    go.padding = 4;
+    go.texelsPerUnit = 40.f;  // two 40x40 charts fit side by side on one page
+    Report rep;
+    std::string err;
+    AtlasGen gen;
+    CHECK(generateAtlas(model, group, 0, go, gen, rep, err));
+    CHECK(gen.unmappedTriangles == 0);
+    BakeOptions bo;
+    bo.filter = Filter::Nearest;
+    std::vector<BakedImage> baked;
+    CHECK(bakeGroup(model, group, gen, bo, baked, rep, err));
+
+    const BakedImage* bc = nullptr;
+    for (const BakedImage& b : baked)
+        if (b.type == TexType::BaseColor) { bc = &b; break; }
+    CHECK(bc != nullptr);
+    if (!bc) return;
+    Raster sc;
+    const std::vector<uint8_t>& rgba = bakedRgba(*bc, sc);
+    const int W = bc->image.w, H = bc->image.h;
+
+    // Per chart: its rectangle in atlas texels and the affine atlas->source map
+    // read off the corners' xrefs (the source UVs are the unit square).
+    struct Chart {
+        float x0, y0, x1, y1;  // in stacked-image texels (page offset applied)
+        V2 pa, pu, pv;         // atlas position of source uv (0,0), (1,0), (0,1)
+    };
+    std::vector<Chart> charts;
+    for (const GenMesh& gm : gen.meshes) {
+        const Primitive& prim = model.primitives[size_t(gm.primId)];
+        Chart c{};
+        c.x0 = c.y0 = 1e9f;
+        c.x1 = c.y1 = -1e9f;
+        bool corners = true;
+        int seen = 0;
+        int page = 0;
+        for (const GenVertex& gv : gm.vertices) {
+            if (gv.atlasIndex < 0) continue;
+            page = gv.atlasIndex;
+            c.x0 = std::min(c.x0, gv.u); c.x1 = std::max(c.x1, gv.u);
+            c.y0 = std::min(c.y0, gv.v); c.y1 = std::max(c.y1, gv.v);
+            const V2& s = prim.vertices[gv.xref].uvsets[0];
+            if (s.u == 0.f && s.v == 0.f) { c.pa = {gv.u, gv.v}; seen |= 1; }
+            else if (s.u == 1.f && s.v == 0.f) { c.pu = {gv.u, gv.v}; seen |= 2; }
+            else if (s.u == 0.f && s.v == 1.f) { c.pv = {gv.u, gv.v}; seen |= 4; }
+            else if (!(s.u == 1.f && s.v == 1.f)) corners = false;
+        }
+        CHECK(corners && seen == 7);
+        if (!corners || seen != 7 || c.x1 <= c.x0) continue;
+        // Pages are stacked vertically and a bake never writes across a page
+        // border, so shift the whole chart into stacked-image coordinates.
+        const float shift = float(page) * float(gen.height);
+        c.y0 += shift;
+        c.y1 += shift;
+        c.pa.v += shift;
+        c.pu.v += shift;
+        c.pv.v += shift;
+        charts.push_back(c);
+    }
+    CHECK(charts.size() == 2);
+    if (charts.size() != 2) return;
+
+    auto paintAt = [&](int x, int y) { return &rgba[(size_t(y) * W + x) * 4]; };
+
+    const std::vector<uint8_t>& src = model.images[0].rgba;
+    int interior = 0, band = 0, escaped = 0, wrongColor = 0, projectionProved = 0;
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+            const uint8_t* p = paintAt(x, y);
+            if (p[3] == 0) continue;  // neutral fill
+            float cx = x + .5f, cy = y + .5f;
+            // The band reaches one texel past the chart bounds; near a corner
+            // the diagonal split lets it follow that edge out to about two.
+            const Chart* best = nullptr;
+            float bestD = 1e9f, bestSu = 0, bestSv = 0;
+            bool insideAny = false;
+            for (const Chart& c : charts) {
+                float dx = std::max(c.x0 - cx, cx - c.x1);
+                float dy = std::max(c.y0 - cy, cy - c.y1);
+                if (dx <= 0.f && dy <= 0.f) insideAny = true;
+                float d = std::max(dx, dy);
+                if (d >= bestD) continue;
+                V2 dU{c.pu.u - c.pa.u, c.pu.v - c.pa.v}, dV{c.pv.u - c.pa.u, c.pv.v - c.pa.v};
+                float su = ((cx - c.pa.u) * dU.u + (cy - c.pa.v) * dU.v) /
+                           (dU.u * dU.u + dU.v * dU.v);
+                float sv = ((cx - c.pa.u) * dV.u + (cy - c.pa.v) * dV.v) /
+                           (dV.u * dV.u + dV.v * dV.v);
+                bestD = d;
+                best = &c;
+                bestSu = su;
+                bestSv = sv;
+            }
+            if (insideAny) { interior++; continue; }
+            band++;
+            if (!best || bestD > 2.05f) { escaped++; continue; }
+            // The bake samples at the projection of the band texel onto the
+            // chart, so the expectation is the clamped source position.
+            float want[4], got[4];
+            sampleBytes(8, 8, src.data(), std::clamp(bestSu, 0.f, 1.f),
+                        std::clamp(bestSv, 0.f, 1.f), Filter::Nearest, Wrap::Repeat,
+                        Wrap::Repeat, want);
+            sampleBytes(8, 8, src.data(), bestSu, bestSv, Filter::Nearest, Wrap::Repeat,
+                        Wrap::Repeat, got);
+            for (int i = 0; i < 4; i++) want[i] *= 255.f;
+            for (int i = 0; i < 4; i++)
+                if (std::fabs(float(p[i]) - want[i]) > 2.f) { wrongColor++; break; }
+            // Where an un-projected sample would have disagreed, the band had to
+            // be projected: without such a texel the check proves nothing.
+            bool differs = false;
+            for (int i = 0; i < 4; i++)
+                if (std::fabs(want[i] - got[i] * 255.f) > 25.f) differs = true;
+            if (differs) projectionProved++;
+        }
+    CHECK(interior > 0);
+    // The ring exists: before, texture sampling kept exact coverage only.
+    CHECK(band > 0);
+    CHECK(escaped == 0);
+    CHECK(wrongColor == 0);
+    CHECK(projectionProved > 0);
 }
 
 static void testMaterialsVariantsBake() {
@@ -1120,6 +1304,7 @@ int main() {
     testColocalTwinRegression();
     testTextureTransformRotation();
     testClampWrapBake();
+    testSeamBandBake();
     testMaterialsVariantsBake();
     testBakeFactors();
     testSharedFactorBake();

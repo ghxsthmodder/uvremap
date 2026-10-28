@@ -283,6 +283,31 @@ ficam para a `0.2.x` (ver M6).
    comparação byte a byte, a garantia de que o modelo testado tem mais de um
    atlas e `--jobs 0` → exit `2`.
 6. **Banda anti-costura em ilhas texturizadas.**
+   ✔ Concluído: a banda alcança 1 texel (antes 0,5px), e o motivo é geométrico —
+   o xatlas escreve os bounds dos charts no **centro** dos texels
+   (`uv = (pixel + 0,5) / resolução`), de modo que meio texel além da borda não
+   cobre texel nenhum: a banda existente não pintava nada. O primeiro texel livre
+   do gutter fica a exatamente 1 texel da borda, e é justamente o vizinho que o
+   filtro bilinear do renderizador mistura ao amostrar o texel de borda; sem ele
+   a emenda continua desenhando o preenchimento neutro do atlas. `bandExtent()`
+   limita o alcance pelo gutter real deixado pelo pack (`AtlasGen::packPadding`,
+   já re-escalonado pela renormalização não quadrada e por `--texture-size`):
+   1,02 texel quando existe coluna livre, 0,5 quando não existe (`--padding 1`),
+   para a dilatação nunca escrever dentro do bloco pintado da ilha vizinha. A
+   amostra da banda passou a ser a **projeção no ponto mais próximo** do triângulo:
+   a forma antiga (zerar a baricêntrica negativa e renormalizar) projeta a partir
+   do vértice oposto e desloca a cor até um texel ao longo da aresta — num teste
+   de tiras verticais a coluna diluída mostrava a cor vizinha, não a da borda. O
+   self-check espelha a mesma regra (strict, tolerância por aresta, projeção),
+   senão o anel inteiro contaria como divergência. Unit test novo
+   `testSeamBandBake`: dois charts com `REPEAT`, anel presente, contido, cor igual
+   à projeção, e ao menos um texel onde a amostra bruta enrolada daria outra cor —
+   com o alcance antigo o teste falha em `band > 0` e em `projectionProved`.
+   Efeito medido no bake: `check_bake.py` sobe de 95,9% para 98,6% (1024x1024) e
+   de 95,5% para 97,9% (não quadrado 2048x1536); no atlas de 6 páginas do
+   DamagedHelmet o anel acrescenta 265.512 texels (~4,2% da área) aos 2.805.989
+   cobertos pelas ilhas. README: parágrafo da banda em *Transferência de texturas
+   PBR* e nota em `--padding`. Golden 315/315, privado 8/8, self-check 99,4–100%.
 7. **Modo lote** — vários arquivos de entrada.
 
 ## M6 — Texturas comprimidas e mipmaps (0.2.x, adiado da 0.1.10)

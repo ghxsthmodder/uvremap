@@ -123,6 +123,61 @@ bool barycentric(const float p[2], const float v0[2], const float v1[2], const f
     return true;
 }
 
+// How far outside a triangle edge the painter dilates, in bake texels. xatlas
+// places chart bounds on texel centres, so the first free gutter texel sits a
+// full texel past the edge: a smaller reach paints nothing and linear filtering
+// at a chart edge still blends the atlas' neutral fill (hairline seam). The
+// reach is capped by the gutter the pack left behind, and the bake texels are
+// scaled with --texture-scale, which shrinks the gutter along with everything
+// else.
+float bandExtent(const AtlasGen& gen, float scaleX, float scaleY) {
+    const float gutter = gen.packPadding * std::min(scaleX, scaleY);
+    return std::min(1.02f, std::max(0.5f, gutter - .02f));
+}
+
+// A distance of `extent` texels outside an edge, expressed in barycentric
+// units: w[c] >= -tol[c] means the sample point sits within the band a painter
+// dilates into, so that linear filtering at a chart edge never pulls in the
+// atlas' neutral fill.
+void bandTolerance(const float tv[3][2], float tol[3], float extent) {
+    const float area2 = std::fabs((tv[1][0] - tv[0][0]) * (tv[2][1] - tv[0][1]) -
+                                  (tv[2][0] - tv[0][0]) * (tv[1][1] - tv[0][1]));
+    for (int c = 0; c < 3; c++) {
+        tol[c] = 0.f;
+        if (area2 <= 1e-12f) return;
+        // Edge c is the one opposite vertex c.
+        const float* q = c == 0 ? tv[1] : (c == 1 ? tv[2] : tv[0]);
+        const float* r = c == 0 ? tv[2] : (c == 1 ? tv[0] : tv[1]);
+        float elen = std::hypot(q[0] - r[0], q[1] - r[1]);
+        if (elen > 1e-9f) tol[c] = std::min(extent * elen / area2, 1e4f);
+    }
+}
+
+// The barycentric weights of the triangle's closest point to p. A band pixel
+// has to carry the colour of the edge it sits outside, so the sample is taken
+// at the foot on that edge (clamped to its ends) rather than along the ray
+// through the opposite vertex, which would slide up to a texel away.
+void projectWeights(const float p[2], const float tv[3][2], float out[3]) {
+    float bestD = 1e30f;
+    float bestW[3] = {1.f / 3.f, 1.f / 3.f, 1.f / 3.f};
+    for (int c = 0; c < 3; c++) {
+        const float* a = tv[c];
+        const float* b = tv[(c + 1) % 3];
+        const float ex = b[0] - a[0], ey = b[1] - a[1];
+        const float len2 = ex * ex + ey * ey;
+        float t = len2 > 1e-12f ? ((p[0] - a[0]) * ex + (p[1] - a[1]) * ey) / len2 : 0.f;
+        t = std::clamp(t, 0.f, 1.f);
+        const float qx = a[0] + t * ex, qy = a[1] + t * ey;
+        const float d2 = (qx - p[0]) * (qx - p[0]) + (qy - p[1]) * (qy - p[1]);
+        if (d2 >= bestD) continue;
+        bestD = d2;
+        bestW[c] = 1.f - t;
+        bestW[(c + 1) % 3] = t;
+        bestW[(c + 2) % 3] = 0.f;
+    }
+    for (int c = 0; c < 3; c++) out[c] = bestW[c];
+}
+
 struct PerType {
     const Image* image = nullptr;  // source image for this triangle's material
     const TexTransform* xform = nullptr;
@@ -146,6 +201,7 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
     }
     const float scaleX = float(texW) / float(gen.width);
     const float scaleY = float(texH) / float(gen.height);
+    const float bandEx = bandExtent(gen, scaleX, scaleY);
 
     // Candidate materials per primitive: the authored one plus every material
     // reachable through KHR_materials_variants mappings.
@@ -322,35 +378,26 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
             const std::vector<int>& candMats =
                 csIt != cand.end() ? csIt->second : kNoMats;
 
-            float tv0[2] = {g0.u * scaleX, g0.v * scaleY};
-            float tv1[2] = {g1.u * scaleX, g1.v * scaleY};
-            float tv2[2] = {g2.u * scaleX, g2.v * scaleY};
-            int minX = int(std::floor(std::min({tv0[0], tv1[0], tv2[0]})));
-            int maxX = int(std::ceil(std::max({tv0[0], tv1[0], tv2[0]})));
-            int minY = int(std::floor(std::min({tv0[1], tv1[1], tv2[1]})));
-            int maxY = int(std::ceil(std::max({tv0[1], tv1[1], tv2[1]})));
+            float tv[3][2] = {{g0.u * scaleX, g0.v * scaleY},
+                              {g1.u * scaleX, g1.v * scaleY},
+                              {g2.u * scaleX, g2.v * scaleY}};
+            int minX = int(std::floor(std::min({tv[0][0], tv[1][0], tv[2][0]}) - bandEx));
+            int maxX = int(std::ceil(std::max({tv[0][0], tv[1][0], tv[2][0]}) + bandEx));
+            int minY = int(std::floor(std::min({tv[0][1], tv[1][1], tv[2][1]}) - bandEx));
+            int maxY = int(std::ceil(std::max({tv[0][1], tv[1][1], tv[2][1]}) + bandEx));
             minX = std::max(minX, 0);
             minY = std::max(minY, 0);
             maxX = std::min(maxX, texW - 1);
             maxY = std::min(maxY, texH - 1);
 
-            // Flat-factor paints extend 0.5px beyond the triangle edges so
-            // abutting charts of the same material form no hairline seams on
-            // the shared layer. Per-edge value of w[c] in pixels is h[c]
-            // (triangle height over edge c), so w[c] >= -0.5/h[c] means the
-            // pixel is within half a pixel outside edge c.
-            float facTol[3] = {0.f, 0.f, 0.f};
-            {
-                const float area2 = std::fabs((tv1[0] - tv0[0]) * (tv2[1] - tv0[1]) -
-                                              (tv2[0] - tv0[0]) * (tv1[1] - tv0[1]));
-                if (area2 > 1e-12f)
-                    for (int c = 0; c < 3; c++) {
-                        const float* q = c == 0 ? tv1 : (c == 1 ? tv2 : tv0);
-                        const float* r = c == 0 ? tv2 : (c == 1 ? tv0 : tv1);
-                        float elen = std::hypot(q[0] - r[0], q[1] - r[1]);
-                        if (elen > 1e-9f) facTol[c] = std::min(0.5f * elen / area2, 1e4f);
-                    }
-            }
+            // Paints reach one texel beyond the triangle edges so the gutter of
+            // a textured chart carries its edge colour, and so abutting islands
+            // of one material form no hairline seam on the layer. Per-edge value
+            // of w[c] in pixels is h[c] (triangle height over edge c), so
+            // w[c] >= -extent/h[c] means the pixel sits within that many pixels
+            // outside edge c.
+            float facTol[3];
+            bandTolerance(tv, facTol, bandEx);
 
             for (int mat : candMats) {
                 const Material& m = model.materials[mat];
@@ -406,14 +453,6 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                 }
                 if (!anyActive) continue;
 
-                // Flat-factor paints also accept pixels just outside the
-                // triangle edges (0.5px band), so charts of the same material
-                // meeting at a shared edge leave no hairline gaps.
-                bool wantBand = false;
-                if (!perMatUsed)
-                    for (int t = 0; t < kTexCount; t++)
-                        wantBand = wantBand || isFactor[t];
-
                 // Track coverage for the factor final-pass painting, which only
                 // applies to dedicated per-material layers.
                 if (perMatUsed && perMatFactorBits[mat]) {
@@ -433,13 +472,17 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                     for (int x = minX; x <= maxX; x++) {
                         float p[2] = {x + 0.5f, y + 0.5f};
                         float w[3];
-                        if (!barycentric(p, tv0, tv1, tv2, w)) continue;
+                        if (!barycentric(p, tv[0], tv[1], tv[2], w)) continue;
                         bool strict = w[0] >= -1e-6f && w[1] >= -1e-6f && w[2] >= -1e-6f;
-                        if (!strict) {
-                            if (!wantBand) continue;
-                            if (w[0] < -facTol[0] || w[1] < -facTol[1] || w[2] < -facTol[2])
-                                continue;
-                        }
+                        if (!strict && (w[0] < -facTol[0] || w[1] < -facTol[1] ||
+                                        w[2] < -facTol[2]))
+                            continue;
+                        // A band pixel carries the colour of the edge it sits
+                        // outside, so the sample is taken at the projection: the
+                        // closest position inside the triangle.
+                        float pw[3];
+                        if (!strict) projectWeights(p, tv, pw);
+                        const float* ww = strict ? w : pw;
                         for (int t = 0; t < kTexCount; t++) {
                             if (!rowBase[t]) continue;
                             if (isFactor[t]) {
@@ -450,12 +493,11 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                                 dst[3] = facRgb[t][3];
                                 continue;
                             }
-                            if (!strict) continue;  // texture sampling keeps exact coverage
                             if (!pt[t].image || pt[t].uvSet < 0) continue;
-                            V2 suv{w[0] * pt[t].su[0].u + w[1] * pt[t].su[1].u +
-                                       w[2] * pt[t].su[2].u,
-                                   w[0] * pt[t].su[0].v + w[1] * pt[t].su[1].v +
-                                       w[2] * pt[t].su[2].v};
+                            V2 suv{ww[0] * pt[t].su[0].u + ww[1] * pt[t].su[1].u +
+                                       ww[2] * pt[t].su[2].u,
+                                   ww[0] * pt[t].su[0].v + ww[1] * pt[t].su[1].v +
+                                       ww[2] * pt[t].su[2].v};
                             float px[4];
                             sampleBytes(pt[t].image->w, pt[t].image->h, pt[t].image->rgba.data(),
                                         suv.u, suv.v, opt.filter, pt[t].wrapS, pt[t].wrapT, px);
@@ -603,6 +645,7 @@ bool selfCheckGroup(const Model& model, const AtlasGroup& group, const AtlasGen&
     if (texW <= 0 || texH <= 0) return true;
     const float scaleX = float(texW) / float(gen.width);
     const float scaleY = float(texH) / float(gen.height);
+    const float bandEx = bandExtent(gen, scaleX, scaleY);
 
     // Candidate materials per primitive (mirror of bakeGroup).
     std::map<int, std::vector<int>> cand;
@@ -749,20 +792,34 @@ bool selfCheckGroup(const Model& model, const AtlasGroup& group, const AtlasGen&
             // chart minified below its source resolution can never agree.
             float ew[3] = {w[0], w[1], w[2]};
             {
-                const float x0 = gv[0]->u * scaleX, y0 = gv[0]->v * scaleY;
+                const float tv[3][2] = {{gv[0]->u * scaleX, gv[0]->v * scaleY},
+                                        {gv[1]->u * scaleX, gv[1]->v * scaleY},
+                                        {gv[2]->u * scaleX, gv[2]->v * scaleY}};
+                const float x0 = tv[0][0], y0 = tv[0][1];
                 const float rx = float(px) + 0.5f - x0;
                 const float ry = float(py - std::max(0, gv[0]->atlasIndex) * texH) + 0.5f - y0;
-                const float dx1 = gv[1]->u * scaleX - x0, dy1 = gv[1]->v * scaleY - y0;
-                const float dx2 = gv[2]->u * scaleX - x0, dy2 = gv[2]->v * scaleY - y0;
-                const float det = dx1 * dy2 - dy1 * dx2;
+                const float det = (tv[1][0] - x0) * (tv[2][1] - y0) -
+                                  (tv[2][0] - x0) * (tv[1][1] - y0);
                 if (std::fabs(det) > 1e-12f) {
-                    float b1 = (rx * dy2 - ry * dx2) / det;
-                    float b2 = (dx1 * ry - dy1 * rx) / det;
-                    float b0 = 1.f - b1 - b2;
-                    if (b0 >= -1e-3f && b1 >= -1e-3f && b2 >= -1e-3f) {
-                        ew[0] = b0;
-                        ew[1] = b1;
-                        ew[2] = b2;
+                    float b[3];
+                    b[1] = (rx * (tv[2][1] - y0) - ry * (tv[2][0] - x0)) / det;
+                    b[2] = ((tv[1][0] - x0) * ry - (tv[1][1] - y0) * rx) / det;
+                    b[0] = 1.f - b[1] - b[2];
+                    if (b[0] >= -1e-6f && b[1] >= -1e-6f && b[2] >= -1e-6f) {
+                        ew[0] = b[0];
+                        ew[1] = b[1];
+                        ew[2] = b[2];
+                    } else {
+                        // The bake also paints the band just outside each edge,
+                        // sampling the closest position inside the triangle; a
+                        // texel reached that way is still this triangle's work.
+                        float tol[3];
+                        bandTolerance(tv, tol, bandEx);
+                        if (b[0] >= -tol[0] && b[1] >= -tol[1] && b[2] >= -tol[2]) {
+                            const float p[2] = {float(px) + 0.5f,
+                                                float(py - std::max(0, gv[0]->atlasIndex) * texH) + 0.5f};
+                            projectWeights(p, tv, ew);
+                        }
                     }
                 }
             }

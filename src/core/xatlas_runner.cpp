@@ -247,6 +247,10 @@ bool generateAtlas(const Model& model, const AtlasGroup& group, int sourceUv,
                     std::to_string(out.height) + " (pack padding widened before the scale)");
     }
     out.pageCount = std::max(1, int(atlas->atlasCount));
+    // The gutter the baker can dilate into, in generated-page texels: pack
+    // padding was spent in the packed square, which the non-square
+    // renormalization then rescales.
+    out.packPadding = float(packOpts.padding) * std::min(su, sv);
     out.meshes.resize(atlas->meshCount);
     for (uint32_t m = 0; m < atlas->meshCount; m++) {
         const xatlas::Mesh& om = atlas->meshes[m];

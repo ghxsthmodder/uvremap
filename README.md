@@ -167,7 +167,10 @@ autorização explícita.
                                       as páginas verticalmente (W x H*N).
 
   `--padding PIXELS`                  Margem entre ilhas UV, expressa em
-                                      pixels do atlas.
+                                      pixels do atlas. É também o espaço que
+                                      a banda anti-costura tem para diluir a
+                                      cor da borda (ver
+                                      *Transferência de texturas PBR*).
 
   `--texels-per-unit VALUE`           Meta de densidade de texels em
                                       relação às unidades do modelo. É
@@ -435,6 +438,19 @@ declarado sem os campos de wrap usa o padrão `CLAMP_TO_EDGE`. Modelos que
 estendem as UVs para além de 1,0 (mosaicos, decalques) dependem disso:
 amostrar como repetição uma textura declarada com borda fixa troca o
 conteúdo de meia ilha por pixels do lado oposto da imagem.
+
+Toda ilha é pintada com uma **banda anti-costura**: os texels do intervalo
+livre encostados na sua borda recebem a cor do ponto de borda mais
+próximo. O xatlas alinha os limites das ilhas ao centro dos texels, de
+modo que a primeira coluna livre fica a exatamente um texel da borda — é
+justamente ela que o filtro bilinear de um renderizador lê ao amostrar o
+texel da borda, e sem a banda ela traz o preenchimento neutro do atlas,
+desenhando uma linha escura na emenda. A banda alcança um texel e nunca
+ultrapassa o intervalo deixado por `--padding` (com `--padding 1` não há
+coluna livre, e o alcance recai para meio texel). Na banda a amostra da
+textura de origem é projetada sobre a aresta da ilha: um texel de banda
+jamais lê fora do intervalo do chart, o que sob `REPEAT` mostraria a borda
+oposta da textura no intervalo.
 
 A transferência deverá considerar também texturas compartilhadas entre
 materiais, transformações de textura, canais UV utilizados e parâmetros

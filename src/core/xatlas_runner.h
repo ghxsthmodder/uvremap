@@ -50,6 +50,7 @@ struct TriKeyHash {
 struct AtlasGen {
     int width = 0, height = 0;  // per-page size
     int pageCount = 1;          // xatlas sub-atlases; baked as stacked pages
+    float packPadding = 4.f;    // gutter in generated-page texels the baker may dilate into
     std::vector<GenMesh> meshes;  // 1:1 with group primitives, in order
     std::vector<int> primOrder;   // meshes[i].primId
     // (primId, sorted corner triple) -> source triangle corners.
