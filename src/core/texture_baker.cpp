@@ -826,6 +826,8 @@ bool selfCheckGroup(const Model& model, const AtlasGroup& group, const AtlasGen&
             continue;
         }
         float pct = 100.f * float(ok) / float(n);
+        if (report.worstAgreement < 0.f || pct < report.worstAgreement)
+            report.worstAgreement = pct;
         std::string line = tag + ": " + std::to_string(ok) + "/" + std::to_string(n) + " (" +
                            [&] {
                                std::ostringstream os;

@@ -256,6 +256,20 @@ ficam para a `0.2.x` (ver M6).
    density` e `report.txt: atlas usage line`.
 4. **`--fail-under N`** — exit code quando a concordância do self-check cai
    abaixo do piso.
+   ✔ Concluído: `selfCheckGroup` registra em `Report::worstAgreement` a menor
+   concordância medida (apenas de imagens que realmente amostraram), e o
+   `runRegenerate` compara com o piso antes de exportar. Abaixo do piso: exit
+   `5` (falha de transferência), nada é publicado e a staging é descartada — o
+   gate é uma recusa, não um aviso, que é o que um pipeline precisa. Sozinho o
+   piso não mede nada: exige `--self-check N` (exit `2` sem ele, idem para valor
+   fora de `(0,100]`). Quando o piso é atendido a linha entra no `report.txt`
+   como `self-check: worst agreement X%, floor Y% (floor met)`. Reaproveitar o
+   número que o relatório imprime (e não um segundo cálculo) é o ponto: unit
+   test `testSelfCheck` extraído confere que `worstAgreement` é exatamente a
+   porcentagem publicada (a 4x4 de origem ampliada dá 98,5% por ruído de último
+   bit na fronteira dos texels de origem — real, não defeito do bake). Golden:
+   `fail-under: breach exits 5`, `breach publishes nothing`, `floor met exits 0`,
+   `floor recorded in report`, e os dois casos de argumento inválido.
 5. **`--jobs N`** — tamanho do pool de threads do bake.
 6. **Banda anti-costura em ilhas texturizadas.**
 7. **Modo lote** — vários arquivos de entrada.

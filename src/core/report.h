@@ -55,6 +55,10 @@ class Report {
     Stats stats;
     // One entry per generated atlas, filled by the regenerate stage.
     std::vector<AtlasUsage> usages;
+    // Lowest --self-check agreement across every sampled image, in percent.
+    // Stays negative when nothing was sampled, so --fail-under only fires on
+    // a measurement that actually happened.
+    float worstAgreement = -1.f;
 
     std::string renderText(const std::string& header) const;
     std::string renderJson(const ReportMeta& meta) const;

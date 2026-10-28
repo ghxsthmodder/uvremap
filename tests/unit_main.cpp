@@ -888,6 +888,23 @@ static void testSelfCheck() {
     CHECK(sawLine);
     for (const auto& w : rep.warnings())
         CHECK(w.find("low agreement") == std::string::npos);
+    // --fail-under gates on rep.worstAgreement, so it must be exactly the
+    // number the report printed: a gate reading a different figure than the
+    // one a human sees would refuse a build the log calls fine.
+    float printed = -1.f;
+    for (const auto& i : rep.infos()) {
+        if (i.find("self-check 't' basecolor:") != 0) continue;
+        size_t open = i.find('('), close = i.find('%');
+        if (open != std::string::npos && close > open)
+            printed = std::stof(i.substr(open + 1, close - open - 1));
+    }
+    CHECK(printed > 90.f);
+    CHECK(std::fabs(rep.worstAgreement - printed) < 0.06f);
+
+    // An atlas region with nothing to compare is not a measurement: a report
+    // that never sampled anything keeps the floor gate silent.
+    Report untouched;
+    CHECK(untouched.worstAgreement < 0.f);
 }
 
 static void testPreviewRenderers() {

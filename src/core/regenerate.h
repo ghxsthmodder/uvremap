@@ -19,6 +19,7 @@ struct RegenOptions {
     int targetUv = 0;
     bool targetUvExplicit = false;  // --target-uv given: never auto-move the atlas
     int selfCheck = 0;  // >0: sample N points per baked image and report agreement
+    float failUnder = 0.f;  // refuse the output when an agreement falls below this percent
     Filter filter = Filter::Linear;
     bool bakeFactors = false;      // fold material factors into texture-less slots
     bool splitMaterials = false;   // emit one baked image per material (default: shared)

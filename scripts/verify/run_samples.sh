@@ -175,6 +175,23 @@ grep -q "self-check.*normal: skipped" "$WORK/selfcheck/report.txt" 2>/dev/null \
     && ok "self-check: normal map marked skipped" || bad "self-check: normal map marked skipped"
 expect "self-check bad value" 2 "$BIN" regenerate "$MP" -o "$WORK/selfcheck2" --self-check 0
 
+# M5.4: --fail-under N — the floor is a gate, not a warning: below it the
+# output is never published and the run exits with the transfer-failure code.
+expect "fail-under: breach exits 5" 5 \
+    "$BIN" regenerate "$MP" -o "$WORK/floor-bad" --atlas-mode scene --self-check 500 \
+        --fail-under 99.9 --quiet
+[ ! -d "$WORK/floor-bad" ] && ok "fail-under: breach publishes nothing" \
+    || bad "fail-under: breach publishes nothing"
+expect "fail-under: floor met exits 0" 0 \
+    "$BIN" regenerate "$MP" -o "$WORK/floor-ok" --atlas-mode scene --self-check 500 \
+        --fail-under 50 --quiet
+grep -q "floor met" "$WORK/floor-ok/report.txt" 2>/dev/null \
+    && ok "fail-under: floor recorded in report" || bad "fail-under: floor recorded in report"
+expect "fail-under without self-check" 2 \
+    "$BIN" regenerate "$MP" -o "$WORK/floor-arg" --atlas-mode scene --fail-under 90
+expect "fail-under out of range" 2 \
+    "$BIN" regenerate "$MP" -o "$WORK/floor-arg2" --atlas-mode scene --self-check 10 --fail-under 0
+
 # M3.3: --preview emits diagnostic PNGs (atlas layout, UV compare, heatmaps)
 png_dims() { # <file> <w> <h>
     python3 - "$1" "$2" "$3" <<'PY'

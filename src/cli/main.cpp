@@ -34,6 +34,8 @@ struct Args {
     float texelsPerUnit = 0.f;
     int sourceUv = 0, targetUv = 0;
     int selfCheck = 0;
+    float failUnder = 0.f;
+    bool failUnderSet = false;
     bool dryRun = false, force = false, verbose = false, quiet = false;
     bool preview = false;
     bool json = false;
@@ -100,6 +102,8 @@ regenerate/preview options:
       --self-check N           statistically verify baked textures against the
                                source (N random samples per rebuilt image);
                                agreement percentages go to the report
+      --fail-under PCT         with --self-check: exit 5 and publish nothing
+                               when the lowest agreement falls below PCT
       --format FORMAT          gltf | glb
       --textures MODE          external | embedded (gltf only; default external,
                                glb always embeds)
@@ -164,6 +168,19 @@ int parseArgs(int argc, char** argv, Args& a) {
                 a.error = "invalid --self-check (expect sample count >= 1)";
                 return 2;
             }
+        } else if (s == "--fail-under") {
+            if (!next(i, v)) return 2;
+            try {
+                a.failUnder = std::stof(v);
+            } catch (...) {
+                a.error = "invalid --fail-under (expect a percentage)";
+                return 2;
+            }
+            if (!(a.failUnder > 0.f && a.failUnder <= 100.f)) {
+                a.error = "invalid --fail-under (expect a percentage in (0, 100])";
+                return 2;
+            }
+            a.failUnderSet = true;
         } else if (s == "--texels-per-unit") {
             if (!next(i, v)) return 2;
             try {
@@ -422,6 +439,11 @@ int cmdRegenerate(const Args& a) {
     o.targetUv = a.targetUv;
     o.targetUvExplicit = a.targetUvExplicit;
     o.selfCheck = a.selfCheck;
+    if (a.failUnderSet && a.selfCheck < 1) {
+        std::cerr << "--fail-under measures the self-check: pass --self-check N as well\n";
+        return 2;
+    }
+    o.failUnder = a.failUnder;
     o.textureW = a.textureW;
     o.textureH = a.textureH;
     if (!a.filterStr.empty() && a.filterStr != "nearest" && a.filterStr != "linear") {

@@ -244,6 +244,18 @@ autorização explícita.
                                       da contagem, pois não há o que
                                       comparar.
 
+  `--fail-under PCT`                  Piso de concordância, em porcentagem,
+                                      para o `--self-check`: se a menor
+                                      concordância medida cair abaixo dele, a
+                                      saída não é publicada e o programa sai
+                                      com código `5`. Sozinho ele não mede
+                                      nada — exige `--self-check N`, porque a
+                                      medição é a mesma que o relatório
+                                      publica. Útil em pipeline, onde a
+                                      regressão de qualidade de um rebake
+                                      precisa quebrar o build em vez de virar
+                                      um aviso.
+
   `--format FORMAT`                   Formato do modelo de saída: `gltf`
                                       ou `glb`.
 
@@ -519,7 +531,9 @@ medidos durante a execução.
 Avisos que não impedem a operação devem ser relatados sem
 necessariamente causar falha. O programa não deverá declarar sucesso se
 o modelo exportado contiver referências quebradas ou se uma
-transferência obrigatória tiver falhado.
+transferência obrigatória tiver falhado. O `--fail-under` usa o código
+`5`: a transferência foi concluída, mas a verificação estatística disse que
+não ficou boa o bastante — e nada é publicado nesse caso.
 
 ## Regras de integridade e segurança de saída
 

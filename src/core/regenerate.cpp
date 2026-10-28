@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <thread>
 
@@ -293,6 +295,28 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
     if (o.selfCheck > 0) {
         for (size_t gi = 0; gi < nGroups; gi++)
             selfCheckGroup(model, groups[gi], gens[gi], bo, atlases[gi].baked, o.selfCheck, rep);
+        if (rep.worstAgreement >= 0.f) {
+            std::ostringstream os;
+            os << std::fixed << std::setprecision(1);
+            os << "self-check: worst agreement " << rep.worstAgreement << "%, floor "
+               << o.failUnder << "%";
+            if (o.failUnder > 0.f) {
+                if (rep.worstAgreement < o.failUnder) {
+                    progress(4, "Baking textures", false);
+                    char msg[192];
+                    std::snprintf(msg, sizeof msg,
+                                  "self-check agreement %.1f%% is below the --fail-under floor "
+                                  "%.1f%%",
+                                  double(rep.worstAgreement), double(o.failUnder));
+                    res.code = ExitCode::ProcessingFailure;
+                    res.message = msg;
+                    fs::remove_all(staging, ec);
+                    return res;
+                }
+                os << " (floor met)";
+            }
+            rep.info(os.str());
+        }
     }
     rep.stats.primitivesSkipped =
         rep.stats.primitivesTotal - rep.stats.primitivesProcessed;
