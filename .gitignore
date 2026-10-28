@@ -3,3 +3,4 @@ build/
 /samples/private/
 output/
 *.tmp
+build_win/
