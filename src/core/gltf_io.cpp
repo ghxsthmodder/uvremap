@@ -217,6 +217,27 @@ const tinygltf::Value* findExt(const tinygltf::ExtensionMap& exts, const std::st
     return &it->second;
 }
 
+// Collects texCoord indices from every textureInfo-shaped object (one holding
+// an integer "index") inside a material extension value, e.g. the
+// clearcoatTexture/clearcoatNormalTexture entries of KHR_materials_clearcoat.
+void collectExtTexCoords(const tinygltf::Value& v, std::vector<int>& out, int depth) {
+    if (depth > 4) return;
+    if (v.IsObject()) {
+        if (v.Has("index") && v.Get("index").IsNumber()) {
+            int tc = 0;
+            if (v.Has("texCoord") && v.Get("texCoord").IsNumber())
+                tc = v.Get("texCoord").GetNumberAsInt();
+            if (tc >= 0 && std::find(out.begin(), out.end(), tc) == out.end())
+                out.push_back(tc);
+        }
+        for (const std::string& k : v.Keys())
+            collectExtTexCoords(v.Get(k), out, depth + 1);
+    } else if (v.IsArray()) {
+        for (size_t i = 0; i < v.ArrayLen(); i++)
+            collectExtTexCoords(v.Get(int(i)), out, depth + 1);
+    }
+}
+
 template <typename TI>
 void parseTexTransform(const TI& ti, TextureRef& ref) {
     const tinygltf::Value* t = findExt(ti.extensions, "KHR_texture_transform");
@@ -434,9 +455,8 @@ struct GltfDocument::Impl {
             m.alphaCutoff = float(tm.alphaCutoff);
             m.doubleSided = tm.doubleSided;
             m.unlit = findExt(tm.extensions, "KHR_materials_unlit") != nullptr;
-            if (const tinygltf::Value* occ = findExt(tm.extensions, "KHR_materials_specular")) {
-                (void)occ;
-            }
+            for (const auto& kv : tm.extensions)
+                collectExtTexCoords(kv.second, m.extTexCoordSets, 0);
             std::string what = "material[" + std::to_string(i) + "] " + tm.name;
             readTextureSlot(tg, tm.pbrMetallicRoughness.baseColorTexture,
                             m.tex[int(TexType::BaseColor)], rep, what + "/baseColor");

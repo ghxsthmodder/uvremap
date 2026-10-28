@@ -40,6 +40,7 @@ struct Args {
     bool bakeFactors = false;
     bool splitMaterials = false;
     bool hasUvSet = false;
+    bool targetUvExplicit = false;
     std::string error;
 };
 
@@ -181,6 +182,7 @@ int parseArgs(int argc, char** argv, Args& a) {
                 return 2;
             }
             a.hasUvSet = true;
+            a.targetUvExplicit = true;
         } else if (s == "--texture-filter") {
             if (!next(i, v)) return 2;
             a.filterStr = v;
@@ -416,6 +418,7 @@ int cmdRegenerate(const Args& a) {
     o.texelsPerUnit = a.texelsPerUnit;
     o.sourceUv = a.sourceUv;
     o.targetUv = a.targetUv;
+    o.targetUvExplicit = a.targetUvExplicit;
     o.selfCheck = a.selfCheck;
     o.textureW = a.textureW;
     o.textureH = a.textureH;

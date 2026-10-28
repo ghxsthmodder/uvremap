@@ -738,10 +738,60 @@ static void testPreviewRenderers() {
     }
 }
 
+// Material extensions are copied to the output verbatim; their textureInfo
+// texCoord sets must be detected at load so the atlas can avoid them.
+static void testExtTexCoordDetection() {
+    const char* path = "unit_ext_texcoord.gltf";
+    {
+        std::ofstream f(path);
+        f << R"json({
+"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],
+"meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1,"TEXCOORD_1":2},
+"indices":3,"material":0}]}],
+"materials":[{"name":"m","extensions":{"KHR_materials_clearcoat":{"clearcoatFactor":1.0,
+"clearcoatRoughnessTexture":{"index":0,"texCoord":1},
+"clearcoatNormalTexture":{"index":0}}}}],
+"textures":[{"source":0,"sampler":0}],"samplers":[{"magFilter":9729,"minFilter":9729}],
+"images":[{"uri":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC"}],
+"buffers":[{"byteLength":96,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAAA/AAAAAAAAAAAAAIA+AAAAAAEAAAACAAAA"}],
+"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36,"target":34962},
+{"buffer":0,"byteOffset":36,"byteLength":24,"target":34962},
+{"buffer":0,"byteOffset":60,"byteLength":24,"target":34962},
+{"buffer":0,"byteOffset":84,"byteLength":12,"target":34963}],
+"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},
+{"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"},
+{"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},
+{"bufferView":3,"componentType":5125,"count":3,"type":"SCALAR"}]
+})json";
+    }
+    Model model;
+    GltfDocument doc;
+    Report rep;
+    std::string err;
+    CHECK(doc.load(path, model, rep, err));
+    std::remove(path);
+    if (model.materials.empty()) return;
+    const std::vector<int>& sets = model.materials[0].extTexCoordSets;
+    CHECK(sets.size() == 2);
+    bool saw0 = false, saw1 = false;
+    for (int s : sets) {
+        if (s == 0) saw0 = true;  // implicit texCoord
+        if (s == 1) saw1 = true;
+    }
+    CHECK(saw0 && saw1);
+    CHECK(model.primitives.empty() || model.primitives[0].vertices.size() == 3);
+    if (!model.primitives.empty()) {
+        const SourceVertex& v = model.primitives[0].vertices[1];
+        CHECK(v.uvsets.size() == 2);
+        if (v.uvsets.size() == 2) CHECK(v.uvsets[1].u == 0.5f && v.uvsets[1].v == 0.f);
+    }
+}
+
 static void testRenderJson() {
     Report rep;
     rep.stats.primitivesTotal = 3;
     rep.stats.atlasCount = 2;
+
     rep.warn("quote\" and newline\n");
     rep.info("plain");
     ReportMeta meta;
@@ -774,6 +824,7 @@ int main() {
     testNonSquareAtlas();
     testSelfCheck();
     testPreviewRenderers();
+    testExtTexCoordDetection();
     testRenderJson();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);

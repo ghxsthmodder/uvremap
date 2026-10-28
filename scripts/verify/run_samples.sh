@@ -325,6 +325,67 @@ else
     bad "split-materials: per-material files missing"
 fi
 
+# M4.2: textures inside material extensions are copied as-is and keep sampling
+# their original TEXCOORD set; the atlas moves to a free set unless the user
+# pinned --target-uv.
+EXTUV="$SAMPLES/TextureTransformMultiTest/glTF/TextureTransformMultiTest.gltf"
+expect "ext-uv auto-move" 0 "$BIN" regenerate "$EXTUV" -o "$WORK/ext-auto" \
+    --atlas-mode scene --quiet
+if grep -q "atlas mapping was moved to the free TEXCOORD" "$WORK/ext-auto/report.txt"; then
+    ok "ext-uv: atlas moved off the set sampled by extensions"
+else
+    bad "ext-uv: no auto-move reported"
+fi
+if [ -f "$WORK/ext-auto/TextureTransformMultiTest.gltf" ] && python3 - "$EXTUV" \
+        "$WORK/ext-auto/TextureTransformMultiTest.gltf" <<'EOF'
+import json, sys
+from collections import Counter
+src = json.load(open(sys.argv[1]))
+out = json.load(open(sys.argv[2]))
+atlas = max(int(k.split('_')[1]) for p in out['meshes'] for pr in p['primitives']
+            for k in pr['attributes'] if k.startswith('TEXCOORD_'))
+assert atlas >= 1, 'atlas set missing'
+def ext_texcoords(doc):
+    c = Counter()
+    for m in doc.get('materials', []):
+        for en, ev in m.get('extensions', {}).items():
+            if not en.startswith('KHR_materials_'):
+                continue
+            for k, v in ev.items():
+                if isinstance(v, dict) and 'index' in v:
+                    c[v.get('texCoord', 0)] += 1
+    return c
+a, b = ext_texcoords(src), ext_texcoords(out)
+assert a, 'sample has no extension textures'
+# materials are cloned per atlased primitive, so compare the multiset of sets
+assert set(b) == set(a), f'extension texCoord sets changed: {dict(a)} vs {dict(b)}'
+assert atlas not in b, 'extension samples the atlas set'
+std = [t.get('texCoord', 0) for m in out['materials']
+       for grp in (m.get('pbrMetallicRoughness', {}), m)
+       for slot in ('baseColorTexture', 'metallicRoughnessTexture', 'normalTexture',
+                    'occlusionTexture', 'emissiveTexture')
+       for t in [grp.get(slot)] if isinstance(t, dict) and 'index' in t]
+assert atlas in std, 'rebaked slots do not sample the atlas set'
+print('ok')
+EOF
+    then
+        ok "ext-uv: extension texCoords preserved, atlas uses a free set"
+    else
+        bad "ext-uv: extension UV wiring broken"
+    fi
+expect "ext-uv pinned" 0 "$BIN" regenerate "$EXTUV" -o "$WORK/ext-pin" \
+    --atlas-mode scene --target-uv 1 --quiet
+if grep -q "referenced by a material extension" "$WORK/ext-pin/report.txt"; then
+    ok "ext-uv: pinned --target-uv warns instead of moving"
+else
+    bad "ext-uv: pinned --target-uv did not warn"
+fi
+if grep -q "material extensions sample" "$WORK/factor-scene/report.txt"; then
+    bad "ext-uv: false positive without extensions"
+else
+    ok "ext-uv: models without extensions keep target UV"
+fi
+
 echo
 echo "verify: $PASS passed, $FAIL failed"
 rm -rf "$WORK"

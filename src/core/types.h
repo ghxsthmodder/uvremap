@@ -61,6 +61,10 @@ struct Material {
     float alphaCutoff = 0.5f;
     bool doubleSided = false;
     bool unlit = false;
+    // UV sets referenced by textureInfo inside KHR_materials_* (and similar)
+    // material extensions. These textures are not rebuilt by uvremap, so the
+    // sets they sample must survive the atlas rewrite (see regenerate()).
+    std::vector<int> extTexCoordSets;
 };
 
 // KHR_materials_variants: which material applies to which variants on a prim.

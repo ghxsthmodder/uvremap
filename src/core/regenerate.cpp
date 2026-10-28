@@ -119,13 +119,45 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
         return res;
     }
     progress(2, "Analyzing geometry", true);
+
+    auto groups = buildGroups(model, o.mode, o.sourceUv, rep);
+
+    // Material extensions (KHR_materials_*) are copied to the output verbatim,
+    // and their textures keep sampling the TEXCOORD set they were authored
+    // with. If the atlas target set is one of those, the extension textures
+    // would silently sample the new atlas mapping instead of their own UVs, so
+    // move the atlas to a set no texture in the model references yet.
+    {
+        bool extUsesTarget = false;
+        size_t sets = 1, extTop = 0;
+        for (const Material& m : model.materials)
+            for (int s : m.extTexCoordSets) {
+                if (s == o.targetUv) extUsesTarget = true;
+                extTop = std::max(extTop, size_t(s) + 1);
+            }
+        for (const Primitive& p : model.primitives)
+            if (!p.vertices.empty())
+                sets = std::max(sets, p.vertices.front().uvsets.size());
+        if (extUsesTarget) {
+            if (o.targetUvExplicit) {
+                rep.warn("TEXCOORD_" + std::to_string(o.targetUv) + " is referenced by a "
+                         "material extension whose texture is copied as-is; those textures "
+                         "will sample the new atlas mapping instead of their original UVs");
+            } else {
+                int moved = int(std::max(sets, extTop));
+                rep.info("material extensions sample TEXCOORD_" + std::to_string(o.targetUv) +
+                         ": the atlas mapping was moved to the free TEXCOORD_" +
+                         std::to_string(moved) + " so those textures keep their original UVs");
+                o.targetUv = moved;
+            }
+        }
+    }
+
     if (o.sourceUv == o.targetUv) {
         rep.info("target UV equals source UV (" + std::to_string(o.sourceUv) +
                  "): the original mapping is replaced by the new atlas mapping in the "
                  "output; textures were already sampled from the in-memory copy");
     }
-
-    auto groups = buildGroups(model, o.mode, o.sourceUv, rep);
 
     if (o.dryRun) {
         res.message = renderDryRunPlan(model, groups, o);

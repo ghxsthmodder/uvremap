@@ -177,7 +177,18 @@ autorização explícita.
                                       amostrar as texturas de origem.
 
   `--target-uv INDEX`                 Índice do conjunto UV que receberá
-                                      o novo mapeamento.
+                                      o novo mapeamento. Quando o modelo usa
+                                      extensões de material
+                                      (`KHR_materials_clearcoat`,
+                                      `transmission`, `sheen`, ...) cujas
+                                      texturas são copiadas sem reconstrução
+                                      e amostram esse mesmo conjunto, o atlas
+                                      é movido automaticamente para o primeiro
+                                      conjunto livre (o original é preservado
+                                      para as extensões) e o fato é registrado
+                                      no relatório; fixar `--target-uv`
+                                      explicitamente inibe o movimento e gera
+                                      apenas um aviso.
 
   `--texture-filter MODE`             Filtro de amostragem: `nearest` ou
                                       `linear`.
