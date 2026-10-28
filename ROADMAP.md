@@ -1,10 +1,10 @@
 # Roadmap — uvremap pós-v0.1.4
 
 Estado: Fases 1–4 do README implementadas e verificados (golden 302/302, releases
-v0.1.0–v0.1.8 com windows-x64 / linux-x86_64 / linux-aarch64 / android-arm64).
+v0.1.0–v0.1.9 com windows-x64 / linux-x86_64 / linux-aarch64 / android-arm64).
 M0 concluído (v0.1.3); M1 concluído (v0.1.5); M2 concluído (multi-página e
 não-quadrado; v0.1.5 + pending); M3 concluído (itens 1–4); M4 itens 1–5
-concluídos (item 1 na v0.1.8, itens 2–5 a lançar). Prioridades abaixo
+concluídos (item 1 na v0.1.8, itens 2–5 na v0.1.9). Prioridades abaixo
 por impacto e risco.
 
 ## Política de versionamento
