@@ -387,6 +387,19 @@ de assumir que a topologia indexada original ficará idêntica.
 O arquivo de entrada deverá permanecer intacto. A saída será gravada no
 diretório indicado por `--output`.
 
+Ao reescrever as primitivas atlasadas, os materiais que elas usavam deixam
+de ser referenciados. O uvremap remove da saída esses materiais órfãos e,
+na sequência, as texturas e imagens que só eles usavam (inclusive os
+arquivos que não chegam a ser copiados), mantendo os índices internos
+consistentes inclusive dentro de extensões (`KHR_materials_*`,
+`KHR_materials_variants`). Recursos que a entrada já trazia sem uso
+obedecem à mesma regra: se nenhuma primitiva os alcança no documento de
+saída, são descartados. A compactação alcança os arranjos de materiais,
+texturas e imagens: uma imagem externa deixa de ser copiada para
+`textures/`; no GLB cujas imagens já vierem embutidas no buffer de entrada
+os bytes antigos permanecem no chunk binário, porque reempacotá-lo exigiria
+reindexar também as vistas de buffer da geometria.
+
 ## Organização do diretório de saída
 
 A estrutura exata poderá variar conforme o formato selecionado, mas o

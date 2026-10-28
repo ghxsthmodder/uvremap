@@ -1,10 +1,10 @@
 # Roadmap — uvremap pós-v0.1.4
 
-Estado: Fases 1–4 do README implementadas e verificados (golden 293/293, releases
+Estado: Fases 1–4 do README implementadas e verificados (golden 300/300, releases
 v0.1.0–v0.1.8 com windows-x64 / linux-x86_64 / linux-aarch64 / android-arm64).
 M0 concluído (v0.1.3); M1 concluído (v0.1.5); M2 concluído (multi-página e
-não-quadrado; v0.1.5 + pending); M3 concluído (itens 1–4); M4 itens 1–2
-concluídos (item 1 na v0.1.8, item 2 a lançar). Prioridades abaixo
+não-quadrado; v0.1.5 + pending); M3 concluído (itens 1–4); M4 itens 1–3
+concluídos (item 1 na v0.1.8, itens 2–3 a lançar; item 4 aberto). Prioridades abaixo
 por impacto e risco.
 
 ## Política de versionamento
@@ -157,6 +157,27 @@ concluídos (ver abaixo), a lançar. M1 completo.
    Com `--target-uv` explícito não se move nada — emite `aviso`. Unit test
    `testExtTexCoordDetection` + checks golden (TextureTransformMultiTest:
    auto-move, `--target-uv` fixado avisando, sem falso positivo).
+
+3. **Higiene de saída: nada inalcançável** — ao clonar materiais para o atlas,
+   os originais ficavam no documento e arrastavam suas texturas (MF188
+   variantes: 18 materiais e 23 imagens órfãs, ~130 MB copiados sem uso).
+   ✔ Concluído: o export poda materiais, texturas e imagens que nenhuma
+   primitiva alcança (inclusive os arquivos que deixam de ser copiados),
+   reindexando também os campos dentro de extensões (`KHR_materials_*`
+   `index`, `KHR_materials_variants` `material`). MF188 privado: 24 → 4
+   arquivos; variante com URIs externas: 143 MB → 18 MB. Novo
+   `scripts/verify/check_orphans.py` (7 checks golden + 2 na regressão privada;
+   `run_private.sh` agora exige `textures/ == imagens do atlas`). Em GLB com
+   imagens já embutidas o chunk binário mantém os bytes antigos (reindexar
+   vistas de buffer da geometria ficaria no meio).
+
+4. **`--self-check` sem `--bake-factors` acusa falso positivo** — achado ao
+   testar o MF188 de `/root/visual_mods/mf188`: basecolor 2/86 (2,3%) porque o
+   verificador espera que o atlas reproduza a aparência completa, enquanto os
+   fatores que ficaram no material (não dobrados em textura) não devem ser
+   comparados texel a texel. Plano: o amostrador deve levar o fator em conta
+   (ou pular amostras de slots sem textura de origem) e reportar quantas
+   amostras foi capaz de usar.
 
 ## Infra recorrente (a cada release)
 

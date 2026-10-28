@@ -14,6 +14,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <set>
 #include <sstream>
 
@@ -238,9 +239,160 @@ void collectExtTexCoords(const tinygltf::Value& v, std::vector<int>& out, int de
     }
 }
 
+// --- Walking integer fields inside extension values -----------------------
+// Extension values are copied to the output untouched, so index fields in them
+// (KHR_materials_* textureInfo "index", KHR_materials_variants "material")
+// must follow any pruning of the arrays they point into. The same shape test
+// is used when collecting and when rewriting, so a field is never missed on
+// one side and shifted on the other.
+constexpr int kValueWalkLimit = 4;
+
+void walkIntField(const tinygltf::Value& v, const char* key,
+                  const std::function<void(int)>& fn, int depth) {
+    if (depth > kValueWalkLimit) return;
+    if (v.IsObject()) {
+        const bool hit = v.Has(key) && v.Get(key).IsNumber();
+        for (const std::string& k : v.Keys()) {
+            if (hit && k == key) fn(v.Get(k).GetNumberAsInt());
+            else walkIntField(v.Get(k), key, fn, depth + 1);
+        }
+    } else if (v.IsArray()) {
+        for (size_t i = 0; i < v.ArrayLen(); i++)
+            walkIntField(v.Get(int(i)), key, fn, depth + 1);
+    }
+}
+
+tinygltf::Value rewriteIntField(const tinygltf::Value& v, const char* key,
+                                const std::function<int(int)>& map, int depth) {
+    if (depth > kValueWalkLimit) return v;
+    if (v.IsObject()) {
+        const bool hit = v.Has(key) && v.Get(key).IsNumber();
+        tinygltf::Value::Object out;
+        for (const std::string& k : v.Keys()) {
+            if (hit && k == key) out[k] = tinygltf::Value(map(v.Get(k).GetNumberAsInt()));
+            else out[k] = rewriteIntField(v.Get(k), key, map, depth + 1);
+        }
+        return tinygltf::Value(std::move(out));
+    }
+    if (v.IsArray()) {
+        tinygltf::Value::Array out;
+        for (size_t i = 0; i < v.ArrayLen(); i++)
+            out.push_back(rewriteIntField(v.Get(int(i)), key, map, depth + 1));
+        return tinygltf::Value(std::move(out));
+    }
+    return v;
+}
+
+// Drops materials, textures and images that nothing in the written document
+// reaches any more. Replacing atlased primitives with cloned materials makes
+// the originals unreachable, and their textures would otherwise still be
+// carried (and copied to disk) in the output.
+struct PruneResult {
+    int materials = 0, textures = 0, images = 0;
+    std::vector<int> imageSource;  // image index -> pre-prune image index
+};
+
+PruneResult pruneUnreferenced(tinygltf::Model& tg) {
+    PruneResult res;
+    const size_t nMat = tg.materials.size(), nTex = tg.textures.size(),
+                 nImg = tg.images.size();
+    std::vector<char> matUsed(nMat, 0), texUsed(nTex, 0), imgUsed(nImg, 0);
+
+    for (tinygltf::Mesh& mesh : tg.meshes) {
+        for (tinygltf::Primitive& tp : mesh.primitives) {
+            if (tp.material >= 0 && size_t(tp.material) < nMat) matUsed[tp.material] = 1;
+            for (auto& kv : tp.extensions)
+                walkIntField(kv.second, "material", [&](int m) {
+                    if (m >= 0 && size_t(m) < nMat) matUsed[m] = 1;
+                }, 0);
+        }
+    }
+    auto markTex = [&](int t) {
+        if (t >= 0 && size_t(t) < nTex) texUsed[t] = 1;
+    };
+    for (size_t i = 0; i < nMat; i++) {
+        if (!matUsed[i]) continue;
+        const tinygltf::Material& m = tg.materials[i];
+        markTex(m.pbrMetallicRoughness.baseColorTexture.index);
+        markTex(m.pbrMetallicRoughness.metallicRoughnessTexture.index);
+        markTex(m.occlusionTexture.index);
+        markTex(m.emissiveTexture.index);
+        markTex(m.normalTexture.index);
+        for (const auto& kv : m.extensions)
+            walkIntField(kv.second, "index", markTex, 0);
+    }
+    for (size_t i = 0; i < nTex; i++)
+        if (texUsed[i] && tg.textures[i].source >= 0 &&
+            size_t(tg.textures[i].source) < nImg)
+            imgUsed[tg.textures[i].source] = 1;
+
+    const auto compact = [](std::vector<char>& used, std::vector<int>& remap) {
+        remap.assign(used.size(), -1);
+        int n = 0;
+        for (size_t i = 0; i < used.size(); i++)
+            if (used[i]) remap[i] = n++;
+        return n;
+    };
+    std::vector<int> matMap, texMap, imgMap;
+    const int keepMat = compact(matUsed, matMap), keepTex = compact(texUsed, texMap),
+              keepImg = compact(imgUsed, imgMap);
+    res.materials = int(nMat) - keepMat;
+    res.textures = int(nTex) - keepTex;
+    res.images = int(nImg) - keepImg;
+    if (res.materials <= 0 && res.textures <= 0 && res.images <= 0) return res;
+
+    for (tinygltf::Mesh& mesh : tg.meshes) {
+        for (tinygltf::Primitive& tp : mesh.primitives) {
+            if (tp.material >= 0 && size_t(tp.material) < nMat)
+                tp.material = matMap[tp.material];
+            for (auto& kv : tp.extensions)
+                kv.second = rewriteIntField(
+                    kv.second, "material",
+                    [&](int m) { return m >= 0 && size_t(m) < nMat ? matMap[m] : m; }, 0);
+        }
+    }
+    std::vector<tinygltf::Material> keptMats;
+    keptMats.reserve(keepMat);
+    for (size_t i = 0; i < nMat; i++) {
+        if (!matUsed[i]) continue;
+        tinygltf::Material m = tg.materials[i];
+        auto fix = [&nTex, &texMap](auto& ti) {
+            if (ti.index >= 0 && size_t(ti.index) < size_t(nTex)) ti.index = texMap[ti.index];
+        };
+        fix(m.pbrMetallicRoughness.baseColorTexture);
+        fix(m.pbrMetallicRoughness.metallicRoughnessTexture);
+        fix(m.occlusionTexture);
+        fix(m.emissiveTexture);
+        fix(m.normalTexture);
+        for (auto& kv : m.extensions)
+            kv.second = rewriteIntField(
+                kv.second, "index",
+                [&](int t) { return t >= 0 && size_t(t) < nTex ? texMap[t] : t; }, 0);
+        keptMats.push_back(std::move(m));
+    }
+    std::vector<tinygltf::Texture> keptTex;
+    keptTex.reserve(keepTex);
+    for (size_t i = 0; i < nTex; i++) {
+        if (!texUsed[i]) continue;
+        tinygltf::Texture t = tg.textures[i];
+        if (t.source >= 0 && size_t(t.source) < nImg) t.source = imgMap[t.source];
+        keptTex.push_back(t);
+    }
+    std::vector<tinygltf::Image> keptImg2;
+    keptImg2.reserve(keepImg);
+    for (size_t i = 0; i < nImg; i++) {
+        if (!imgUsed[i]) continue;
+        keptImg2.push_back(tg.images[i]);
+        res.imageSource.push_back(int(i));
+    }
+    tg.materials = std::move(keptMats);
+    tg.textures = std::move(keptTex);
+    tg.images = std::move(keptImg2);
+    return res;
+}
+
 template <typename TI>
-void parseTexTransform(const TI& ti, TextureRef& ref) {
-    const tinygltf::Value* t = findExt(ti.extensions, "KHR_texture_transform");
+void parseTexTransform(const TI& ti, TextureRef& ref) {    const tinygltf::Value* t = findExt(ti.extensions, "KHR_texture_transform");
     if (!t) return;
     ref.hasTransform = true;
     TexTransform& x = ref.transform;
@@ -1095,13 +1247,25 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
         }
     }
 
+    // Drop what the atlas rewrite left unreachable before copying anything, so
+    // superseded textures do not end up in the delivery.
+    const PruneResult pruned = pruneUnreferenced(tg);
+    if (pruned.materials || pruned.textures || pruned.images)
+        report.info("pruned " + std::to_string(pruned.materials) + " material(s), " +
+                    std::to_string(pruned.textures) + " texture(s) and " +
+                    std::to_string(pruned.images) +
+                    " image(s) no primitive references after the atlas rewrite");
+
     // Make original images portable: embed for glb; copy files for gltf.
     std::map<std::string, std::string> copiedUris;  // old uri -> new relative uri
     for (size_t i = 0; i < tg.images.size(); i++) {
         tinygltf::Image& ti = tg.images[i];
-        bool isNew = i >= core.images.size();
+        // Pruning shifted the image array; core.images is still indexed by the
+        // pre-prune position.
+        const int origIdx = i < pruned.imageSource.size() ? pruned.imageSource[i] : int(i);
+        bool isNew = size_t(origIdx) >= core.images.size();
         if (isNew) continue;  // baked images already handled
-        const Image& src = core.images[i];
+        const Image& src = core.images[origIdx];
         if (opt.binary) {
             if (ti.bufferView < 0 && !src.raw.empty()) {
                 bw.appendRaw(src.raw.data(), src.raw.size());

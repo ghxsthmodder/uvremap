@@ -386,6 +386,57 @@ else
     ok "ext-uv: models without extensions keep target UV"
 fi
 
+# M4.3: the atlas rewrite must not leave unreachable materials, textures,
+# images or files behind.
+expect "prune: report line" 0 "$BIN" regenerate "$TT" -o "$WORK/prune" \
+    --atlas-mode scene --format gltf --quiet
+if grep -q "no primitive references after the atlas rewrite" "$WORK/prune/report.txt"; then
+    ok "prune: reported in report.txt"
+else
+    bad "prune: nothing reported"
+fi
+for dir in prune ext-auto factor-scene factor-split; do
+    if python3 "$ROOT/scripts/verify/check_orphans.py" "$WORK/$dir" >/dev/null 2>&1; then
+        ok "prune: $dir has no orphan material/texture/image/file"
+    else
+        bad "prune: $dir still carries unreachable entries"
+        python3 "$ROOT/scripts/verify/check_orphans.py" "$WORK/$dir" 2>&1 |
+            sed -n '1,4p' | sed 's/^/      /'
+    fi
+done
+# Extension texture references survive the renumbering: the set of image files
+# reachable from KHR_materials_* must stay exactly the input's.
+if [ -f "$WORK/ext-auto/TextureTransformMultiTest.gltf" ] && python3 - "$EXTUV" \
+        "$WORK/ext-auto/TextureTransformMultiTest.gltf" <<'EOF'
+import json, os, sys
+def ext_uris(path):
+    d = json.load(open(path))
+    base = os.path.dirname(path)
+    uris = []
+    for m in d.get('materials', []):
+        for en, ev in m.get('extensions', {}).items():
+            if not en.startswith('KHR_materials_'):
+                continue
+            for v in ev.values():
+                if isinstance(v, dict) and isinstance(v.get('index'), int):
+                    uri = d['images'][d['textures'][v['index']]['source']].get('uri', '')
+                    if not uri.startswith('data:'):
+                        uris.append(os.path.basename(uri))
+                    assert os.path.exists(os.path.join(base, uri)), f'missing {uri}'
+    return sorted(uris)
+a = ext_uris(sys.argv[1])
+b = ext_uris(sys.argv[2])
+assert a, 'sample has no extension textures'
+assert a == b, f'extension textures changed: {a} vs {b}'
+assert not [u for u in b if u.startswith('scene_0')], 'extension points at baked atlas'
+print('ok')
+EOF
+    then
+        ok "prune: extension texture indices still resolve to the original images"
+    else
+        bad "prune: extension texture indices broken"
+    fi
+
 echo
 echo "verify: $PASS passed, $FAIL failed"
 rm -rf "$WORK"

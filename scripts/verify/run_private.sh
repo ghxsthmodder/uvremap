@@ -46,11 +46,18 @@ else
     else
         bad "shared-by-default: shared=$SHARED per-material=$PERMAT"
     fi
-    # Original external textures must all be carried over (MF188: ~20 deduplicated
-    # sources + shared bakes = ~24 files; the split layout yields ~69).
+    # M4.3: every original texture of MF188 is rebuilt into the shared atlas, so
+    # the pruned output must carry nothing but the baked images.
     NTX=$(ls "$OUT/textures" 2>/dev/null | wc -l)
-    if [ "$NTX" -ge 20 ] && [ "$NTX" -le 80 ]; then ok "texture dir sane ($NTX files)"
-    else bad "texture dir unexpected ($NTX files)"; fi
+    if [ "$NTX" = "$SHARED" ]; then ok "texture dir pruned to the $NTX baked atlases"
+    else bad "texture dir has $NTX files, expected $SHARED"; fi
+    if python3 "$ROOT/scripts/verify/check_orphans.py" "$OUT" >/dev/null 2>&1; then
+        ok "no orphan material/texture/image/file in output"
+    else
+        bad "output still carries unreachable entries"
+        python3 "$ROOT/scripts/verify/check_orphans.py" "$OUT" 2>&1 | sed -n '1,4p' |
+            sed 's/^/      /'
+    fi
 
     # Self-check agreement on basecolor must stay high (band-seam guard).
     BC=$(python3 - "$OUT/report.txt" <<'EOF'
