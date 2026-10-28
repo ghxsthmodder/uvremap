@@ -307,6 +307,24 @@ EOF
     fi
 done
 
+# M4.1: multi-material scene bakes into shared images by default (one per
+# texture type); --split-materials restores the per-material layout.
+expect "bake-factors (split)" 0 \
+    "$BIN" regenerate "$FACT" -o "$WORK/factor-split" --atlas-mode scene --bake-factors \
+        --split-materials --texture-filter nearest --target-uv 1 --quiet
+if [ -d "$WORK/factor-scene/textures" ] &&
+        ! ls "$WORK/factor-scene/textures" | grep -q '_mat[0-9]'; then
+    ok "shared-by-default: no per-material files"
+else
+    bad "shared-by-default: per-material files appeared"
+fi
+if ls "$WORK/factor-split/textures" 2>/dev/null | grep -q '_mat0' &&
+        ls "$WORK/factor-split/textures" | grep -q '_mat1'; then
+    ok "split-materials: per-material files restored"
+else
+    bad "split-materials: per-material files missing"
+fi
+
 echo
 echo "verify: $PASS passed, $FAIL failed"
 rm -rf "$WORK"

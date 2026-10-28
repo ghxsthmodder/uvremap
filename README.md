@@ -185,6 +185,16 @@ autorização explícita.
   `--texture-size WIDTHxHEIGHT`       Resolução das imagens de textura
                                       reconstruídas.
 
+  `--split-materials`                 Emite uma imagem por material por tipo
+                                      de mapa, mesmo quando o atlas é
+                                      compartilhado. Por padrão um atlas com
+                                      vários materiais produz uma única
+                                      imagem por tipo (as ilhas de cada
+                                      material ocupam regiões disjuntas);
+                                      modelos com `KHR_materials_variants`
+                                      usam imagens por material de qualquer
+                                      forma.
+
   `--self-check N`                    Amostra N pontos aleatórios por
                                       imagem reconstruída e confere a
                                       concordância com a textura de origem

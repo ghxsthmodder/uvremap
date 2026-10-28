@@ -17,11 +17,14 @@ struct BakeOptions {
     int textureW = 0, textureH = 0;  // 0 = use atlas size
     int sourceUv = 0;                // fallback UV set when a texture's texCoord is missing
     bool bakeFactors = false;        // fold material factors into texture-less slots
+    bool splitMaterials = false;     // one image per material even when a shared one fits
 };
 
 // Bakes every present texture type of the group's materials into atlas-sized
-// images. One BakedImage per (material, type): material -1 is the shared
-// layer used when no primitive needs per-material copies (e.g. KHR_materials_variants).
+// images. Emits one shared image per type (material -1) by default; factor
+// colors are painted inline only on their own texels. Per-material images are
+// emitted instead when primitives carry multiple candidate materials
+// (KHR_materials_variants) or when BakeOptions::splitMaterials is set.
 bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                const BakeOptions& opt, std::vector<BakedImage>& outBaked,
                Report& report, std::string& err);

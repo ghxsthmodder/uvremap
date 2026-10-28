@@ -131,6 +131,20 @@ concluídos (ver abaixo), a lançar. M1 completo.
    `warningCount`) e imprime o mesmo documento na saída padrão em vez do
    resumo legível; strings são escapadas conforme a spec JSON.
 
+## M4 — Consolidação de texturas
+
+1. **Atlas compartilhado: uma imagem por tipo de mapa** (pedido do usuário no
+   MF188 — 49 texturas de 2048x4096 para 18 materiais).
+   ✔ Concluído: em grupos multi-material (scene/mesh) o baker pinta as cores
+   de fator diretamente na camada compartilhada, com banda de 0,5px além das
+   arestas do triângulo para fechar costuras sem invadir o vizinho; o layout
+   por material só é forçado por `KHR_materials_variants` ou pela nova flag
+   `--split-materials`. MF188: 49 imagens → 4 (`scene_0_basecolor.png`,
+   `scene_0_metallic_roughness.png`, `scene_0_normal.png`,
+   `scene_0_occlusion.png`), 69 → 24 arquivos na saída, self-check 100% em
+   basecolor/MR. Unit test `testSharedFactorBake` + checks golden novos
+   (shared por padrão, `--split-materials` restaurando `_matN`).
+
 ## Infra recorrente (a cada release)
 
 - Fluxo já automatizado: bump `project()` → tag `vX.Y.Z` → CI publica 3 binários.

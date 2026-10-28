@@ -461,6 +461,76 @@ static void testBakeFactors() {
     CHECK(mrCopies == 1);
 }
 
+static void testSharedFactorBake() {
+    // Two texture-less materials in one atlas group without variants: the
+    // baker emits a single shared image per type (material -1) carrying both
+    // factor colors; --split-materials restores the per-material layout.
+    Model model = makeQuadModel();
+    Primitive p2 = model.primitives[0];
+    for (auto& v : p2.vertices) v.position.x += 2.f;
+    p2.primIndex = 1;
+    p2.meshIndex = 1;
+    p2.material = 1;
+    model.primitives.push_back(std::move(p2));
+    model.materials.clear();
+    Material m0;
+    m0.name = "red";
+    m0.baseColorFactor = {0.8f, 0.05f, 0.05f, 1.f};
+    Material m1;
+    m1.name = "green";
+    m1.baseColorFactor = {0.05f, 0.8f, 0.05f, 1.f};
+    model.materials = {m0, m1};
+
+    AtlasGroup group;
+    group.id = 0;
+    group.name = "t";
+    group.primitives = {0, 1};
+    group.materials = {0, 1};
+
+    Report rep;
+    std::string err;
+    GenOptions go;
+    go.resolutionW = go.resolutionH = 64;
+    go.padding = 1;
+    AtlasGen gen;
+    CHECK(generateAtlas(model, group, 0, go, gen, rep, err));
+
+    BakeOptions bo;
+    bo.filter = Filter::Nearest;
+    bo.bakeFactors = true;
+    std::vector<BakedImage> baked;
+    CHECK(bakeGroup(model, group, gen, bo, baked, rep, err));
+    int bc = 0;
+    int red = 0, green = 0;
+    for (const BakedImage& b : baked) {
+        if (b.type != TexType::BaseColor) continue;
+        bc++;
+        CHECK(b.material == -1);
+        CHECK(b.factorBaked & factorBit(TexType::BaseColor));
+        Raster sc;
+        const std::vector<uint8_t>& rgba = bakedRgba(b, sc);
+        for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
+            if (rgba[i + 3] == 0) continue;
+            if (rgba[i] > 180 && rgba[i + 1] < 70) red++;
+            if (rgba[i + 1] > 180 && rgba[i] < 70) green++;
+        }
+    }
+    CHECK(bc == 1);
+    CHECK(red > 0);
+    CHECK(green > 0);
+
+    bo.splitMaterials = true;
+    std::vector<BakedImage> splitBaked;
+    CHECK(bakeGroup(model, group, gen, bo, splitBaked, rep, err));
+    int sbc = 0;
+    for (const BakedImage& b : splitBaked) {
+        if (b.type != TexType::BaseColor) continue;
+        sbc++;
+        CHECK(b.material >= 0);
+    }
+    CHECK(sbc == 2);
+}
+
 static void testMultiPageAtlas() {
     // Four 1x1 quads packed at high texel density against a tiny fixed
     // resolution force several xatlas sub-atlases; the baker stacks them
@@ -699,6 +769,7 @@ int main() {
     testTextureTransformRotation();
     testMaterialsVariantsBake();
     testBakeFactors();
+    testSharedFactorBake();
     testMultiPageAtlas();
     testNonSquareAtlas();
     testSelfCheck();

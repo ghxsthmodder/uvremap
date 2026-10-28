@@ -119,8 +119,7 @@ std::vector<AtlasGroup> buildGroups(const Model& model, AtlasMode mode, int sour
         if (mode != AtlasMode::Material && g.materials.size() > 1) {
             report.info("atlas group '" + g.name + "' merges " +
                         std::to_string(g.materials.size()) +
-                        " materials; each material gets its own rebuilt textures "
-                        "inside the shared atlas");
+                        " materials; their charts are packed into one shared atlas");
         }
         for (int pid : g.primitives)
             if (!model.primitives[pid].variantMappings.empty()) {

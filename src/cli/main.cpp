@@ -38,6 +38,7 @@ struct Args {
     bool preview = false;
     bool json = false;
     bool bakeFactors = false;
+    bool splitMaterials = false;
     bool hasUvSet = false;
     std::string error;
 };
@@ -89,6 +90,9 @@ regenerate/preview options:
                                occlusionStrength) into rebuilt textures for
                                slots that have no image; the neutralized
                                factor then lives in the texture only
+      --split-materials        emit one baked image per material instead of a
+                               single shared image per texture type; forces the
+                               pre-0.1 layout (needed for variants anyway)
       --texture-size WxH       resolution of rebuilt textures
       --self-check N           statistically verify baked textures against the
                                source (N random samples per rebuilt image);
@@ -182,6 +186,8 @@ int parseArgs(int argc, char** argv, Args& a) {
             a.filterStr = v;
         } else if (s == "--bake-factors") {
             a.bakeFactors = true;
+        } else if (s == "--split-materials") {
+            a.splitMaterials = true;
         } else if (s == "--format") {
             if (!next(i, v)) return 2;
             a.format = v;
@@ -419,6 +425,7 @@ int cmdRegenerate(const Args& a) {
     }
     o.filter = a.filterStr == "nearest" ? Filter::Nearest : Filter::Linear;
     o.bakeFactors = a.bakeFactors;
+    o.splitMaterials = a.splitMaterials;
     if (!a.format.empty()) {
         if (a.format == "glb") o.binary = true;
         else if (a.format == "gltf") o.binary = false;

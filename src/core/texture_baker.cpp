@@ -203,9 +203,11 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
         neutralTexel(t, n);
         r.fill(n[0], n[1], n[2], n[3]);
     };
-    // Dedicated per-material layers are used when variant candidates need them,
-    // or when a factor-baked material shares the atlas with other materials
-    // (its flat color must not bleed into theirs).
+    // Dedicated per-material layers are used only when variant candidates share
+    // atlas regions, or when --split-materials asks for one image per material.
+    // Factor-baked materials otherwise paint inline on the shared layer, at
+    // exact triangle coverage, so their flat color never touches a neighbour's
+    // texels.
     bool perMatUsed = false;
     if (anyMulti) {
         perMatUsed = true;
@@ -220,17 +222,15 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
             }
         }
     }
-        // A factor material may share the plain layers only when no other material
-    // contributes content to them.
-    if (!perMatUsed && perMatFactorBits.size() > 1) perMatUsed = true;
-    if (!perMatUsed && !perMatFactorBits.empty() && matIds.size() > 1) perMatUsed = true;
+    if (opt.splitMaterials) perMatUsed = true;
     std::map<int, std::vector<std::vector<Raster>>> perMatLayers;  // mat -> page -> layers
     auto matPage = [&](int mat) -> std::vector<std::vector<Raster>>& {
         std::vector<std::vector<Raster>>& pl = perMatLayers[mat];
         if (pl.empty()) pl.assign(pages, std::vector<Raster>(kTexCount));
         return pl;
     };
-    // Texel-coverage masks for factor painting, keyed (material|-1, page).
+    // Texel-coverage masks for factor painting on dedicated layers, keyed
+    // (material, page).
     std::map<std::pair<int, int>, std::vector<uint8_t>> fillMasks;
 
     int trianglesUnmapped = 0;
@@ -312,19 +312,41 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
             maxX = std::min(maxX, texW - 1);
             maxY = std::min(maxY, texH - 1);
 
+            // Flat-factor paints extend 0.5px beyond the triangle edges so
+            // abutting charts of the same material form no hairline seams on
+            // the shared layer. Per-edge value of w[c] in pixels is h[c]
+            // (triangle height over edge c), so w[c] >= -0.5/h[c] means the
+            // pixel is within half a pixel outside edge c.
+            float facTol[3] = {0.f, 0.f, 0.f};
+            {
+                const float area2 = std::fabs((tv1[0] - tv0[0]) * (tv2[1] - tv0[1]) -
+                                              (tv2[0] - tv0[0]) * (tv1[1] - tv0[1]));
+                if (area2 > 1e-12f)
+                    for (int c = 0; c < 3; c++) {
+                        const float* q = c == 0 ? tv1 : (c == 1 ? tv2 : tv0);
+                        const float* r = c == 0 ? tv2 : (c == 1 ? tv0 : tv1);
+                        float elen = std::hypot(q[0] - r[0], q[1] - r[1]);
+                        if (elen > 1e-9f) facTol[c] = std::min(0.5f * elen / area2, 1e4f);
+                    }
+            }
+
             for (int mat : candMats) {
                 const Material& m = model.materials[mat];
                 PerType pt[kTexCount];
                 Raster* target[kTexCount];
+                bool isFactor[kTexCount];
+                uint8_t facRgb[kTexCount][4];
                 bool anyActive = false;
                 for (int t = 0; t < kTexCount; t++) {
                     target[t] = nullptr;
+                    isFactor[t] = false;
                     if (!perMatNeed[mat][t]) continue;
                     Raster& layer = perMatUsed ? matPage(mat)[page][t] : sharedLayers[page][t];
                     if (perMatFactorBits[mat] & factorBit(TexType(t))) {
-                        // Flat factor: covered texels are painted in a final pass.
                         ensureLayer(layer, TexType(t));
                         target[t] = &layer;
+                        if (!perMatUsed && factorTexel(m, TexType(t), facRgb[t]))
+                            isFactor[t] = true;  // paint inline on the shared layer
                         anyActive = true;
                         continue;
                     }
@@ -356,9 +378,18 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                 }
                 if (!anyActive) continue;
 
-                // Track coverage for factor painting on this page.
-                if (perMatFactorBits[mat]) {
-                    std::vector<uint8_t>& mask = fillMasks[{perMatUsed ? mat : -1, page}];
+                // Flat-factor paints also accept pixels just outside the
+                // triangle edges (0.5px band), so charts of the same material
+                // meeting at a shared edge leave no hairline gaps.
+                bool wantBand = false;
+                if (!perMatUsed)
+                    for (int t = 0; t < kTexCount; t++)
+                        wantBand = wantBand || isFactor[t];
+
+                // Track coverage for the factor final-pass painting, which only
+                // applies to dedicated per-material layers.
+                if (perMatUsed && perMatFactorBits[mat]) {
+                    std::vector<uint8_t>& mask = fillMasks[{mat, page}];
                     if (mask.empty()) mask.assign(size_t(texW) * texH, 0);
                     for (int y = minY; y <= maxY; y++)
                         std::fill(mask.begin() + size_t(y) * texW + minX,
@@ -375,9 +406,23 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                         float p[2] = {x + 0.5f, y + 0.5f};
                         float w[3];
                         if (!barycentric(p, tv0, tv1, tv2, w)) continue;
-                        if (w[0] < -1e-6f || w[1] < -1e-6f || w[2] < -1e-6f) continue;
+                        bool strict = w[0] >= -1e-6f && w[1] >= -1e-6f && w[2] >= -1e-6f;
+                        if (!strict) {
+                            if (!wantBand) continue;
+                            if (w[0] < -facTol[0] || w[1] < -facTol[1] || w[2] < -facTol[2])
+                                continue;
+                        }
                         for (int t = 0; t < kTexCount; t++) {
                             if (!rowBase[t]) continue;
+                            if (isFactor[t]) {
+                                uint8_t* dst = rowBase[t] + size_t(x) * 4;
+                                dst[0] = facRgb[t][0];
+                                dst[1] = facRgb[t][1];
+                                dst[2] = facRgb[t][2];
+                                dst[3] = facRgb[t][3];
+                                continue;
+                            }
+                            if (!strict) continue;  // texture sampling keeps exact coverage
                             if (!pt[t].image || pt[t].uvSet < 0) continue;
                             V2 suv{w[0] * pt[t].su[0].u + w[1] * pt[t].su[1].u +
                                        w[2] * pt[t].su[2].u,
@@ -414,12 +459,11 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
         int matKey = mk.first.first;
         int page = mk.first.second;
         std::vector<uint8_t>& mask = mk.second;
-        int matForBits = matKey >= 0 ? matKey : perMatFactorBits.begin()->first;
         for (int t = 0; t < kTexCount; t++) {
-            if (!(perMatFactorBits[matForBits] & factorBit(TexType(t)))) continue;
+            if (!(perMatFactorBits[matKey] & factorBit(TexType(t)))) continue;
             uint8_t fc[4];
-            if (!factorTexel(model.materials[matForBits], TexType(t), fc)) continue;
-            Raster& ls = matKey >= 0 ? matPage(matKey)[page][t] : sharedLayers[page][t];
+            if (!factorTexel(model.materials[matKey], TexType(t), fc)) continue;
+            Raster& ls = matPage(matKey)[page][t];
             ensureLayer(ls, TexType(t));
             for (size_t i = 0; i < mask.size(); i++) {
                 if (!mask[i]) continue;

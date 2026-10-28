@@ -183,6 +183,7 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
     BakeOptions bo;
     bo.filter = o.filter;
     bo.bakeFactors = o.bakeFactors;
+    bo.splitMaterials = o.splitMaterials;
     bo.textureW = o.textureW;
     bo.textureH = o.textureH;
     bo.sourceUv = o.sourceUv;
