@@ -1,11 +1,12 @@
 # Roadmap — uvremap pós-v0.1.4
 
-Estado: Fases 1–4 do README implementadas e verificados (golden 302/302, releases
-v0.1.0–v0.1.9 com windows-x64 / linux-x86_64 / linux-aarch64 / android-arm64).
+Estado: Fases 1–4 do README implementadas e verificados (golden 328/328, releases
+v0.1.0–v0.1.10 com windows-x64 / linux-x86_64 / linux-aarch64 / android-arm64).
 M0 concluído (v0.1.3); M1 concluído (v0.1.5); M2 concluído (multi-página e
 não-quadrado; v0.1.5 + pending); M3 concluído (itens 1–4); M4 itens 1–5
-concluídos (item 1 na v0.1.8, itens 2–5 na v0.1.9); M5 em andamento (fecha a
-série 0.1.x na v0.1.10). Prioridades abaixo por impacto e risco.
+concluídos (item 1 na v0.1.8, itens 2–5 na v0.1.9); M5 concluído (itens 1–7 na
+v0.1.10), que fecha a série `0.1.x`. A próxima release é `0.2.0` (M6).
+Prioridades abaixo por impacto e risco.
 
 ## Política de versionamento
 
@@ -201,6 +202,9 @@ concluídos (ver abaixo), a lançar. M1 completo.
    8/8) e terceiro material sem fator nenhum em `make_factor_model.py`.
 
 ## M5 — Exatidão e diagnóstico de fechamento (v0.1.10)
+
+Status: itens 1–7 implementados e verificados (unit + golden 328/328, privado
+8/8); lançados na v0.1.10.
 
 Escopo acordado para encerrar a série `0.1.x`; `KHR_texture_basisu` e mipmaps
 ficam para a `0.2.x` (ver M6).
