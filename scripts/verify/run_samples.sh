@@ -192,6 +192,32 @@ expect "fail-under without self-check" 2 \
 expect "fail-under out of range" 2 \
     "$BIN" regenerate "$MP" -o "$WORK/floor-arg2" --atlas-mode scene --self-check 10 --fail-under 0
 
+# M5.5: --jobs N — the worker count changes how fast the bake runs, never what
+# it writes. Many atlases, baked one worker at a time and with several, must
+# leave byte-identical textures behind.
+ABG="$SAMPLES/ABeautifulGame/glTF/ABeautifulGame.gltf"
+expect "jobs: single worker exit 0" 0 \
+    "$BIN" regenerate "$ABG" -o "$WORK/jobs1" --atlas-mode material --resolution 256x256 \
+        --jobs 1 --quiet
+expect "jobs: several workers exit 0" 0 \
+    "$BIN" regenerate "$ABG" -o "$WORK/jobs4" --atlas-mode material --resolution 256x256 \
+        --jobs 4 --quiet
+if diff -rq "$WORK/jobs1/textures" "$WORK/jobs4/textures" >/dev/null 2>&1 &&
+   [ -n "$(ls -A "$WORK/jobs1/textures" 2>/dev/null)" ]; then
+    ok "jobs: textures byte-identical across worker counts"
+else
+    bad "jobs: textures byte-identical across worker counts"
+fi
+python3 - "$WORK/jobs1/report.txt" <<'PY'
+import re, sys
+m = re.search(r'Atlas count: (\d+)', open(sys.argv[1]).read())
+assert m and int(m.group(1)) > 1, 'the determinism run needs several atlases'
+PY
+[ $? -eq 0 ] && ok "jobs: determinism run covers a multi-atlas model" \
+    || bad "jobs: determinism run covers a multi-atlas model"
+expect "jobs: invalid value" 2 \
+    "$BIN" regenerate "$MP" -o "$WORK/jobs0" --atlas-mode scene --jobs 0
+
 # M3.3: --preview emits diagnostic PNGs (atlas layout, UV compare, heatmaps)
 png_dims() { # <file> <w> <h>
     python3 - "$1" "$2" "$3" <<'PY'

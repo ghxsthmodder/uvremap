@@ -24,6 +24,7 @@ struct RegenOptions {
     bool bakeFactors = false;      // fold material factors into texture-less slots
     bool splitMaterials = false;   // emit one baked image per material (default: shared)
     int textureW = 0, textureH = 0;
+    int jobs = 0;  // bake workers; 0 = the default half-the-cores heuristic
     bool binary = true;            // glb default unless --format gltf
     bool embedTextures = false;    // gltf: base64 data URIs instead of files
     bool formatSet = false;

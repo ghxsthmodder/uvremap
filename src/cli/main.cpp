@@ -33,6 +33,7 @@ struct Args {
     int padding = 4;
     float texelsPerUnit = 0.f;
     int sourceUv = 0, targetUv = 0;
+    int jobs = 0;
     int selfCheck = 0;
     float failUnder = 0.f;
     bool failUnderSet = false;
@@ -104,6 +105,9 @@ regenerate/preview options:
                                agreement percentages go to the report
       --fail-under PCT         with --self-check: exit 5 and publish nothing
                                when the lowest agreement falls below PCT
+      --jobs N                 worker threads baking the atlases (default:
+                               half the cores); the result is byte-identical
+                               whatever N is
       --format FORMAT          gltf | glb
       --textures MODE          external | embedded (gltf only; default external,
                                glb always embeds)
@@ -181,6 +185,11 @@ int parseArgs(int argc, char** argv, Args& a) {
                 return 2;
             }
             a.failUnderSet = true;
+        } else if (s == "--jobs") {
+            if (!next(i, v) || !parseInt(v, a.jobs) || a.jobs < 1) {
+                a.error = "invalid --jobs (expect worker count >= 1)";
+                return 2;
+            }
         } else if (s == "--texels-per-unit") {
             if (!next(i, v)) return 2;
             try {
@@ -444,6 +453,7 @@ int cmdRegenerate(const Args& a) {
         return 2;
     }
     o.failUnder = a.failUnder;
+    o.jobs = a.jobs;
     o.textureW = a.textureW;
     o.textureH = a.textureH;
     if (!a.filterStr.empty() && a.filterStr != "nearest" && a.filterStr != "linear") {

@@ -266,7 +266,10 @@ RegenResult runRegenerate(const std::string& input, const RegenOptions& optIn) {
     };
     const size_t nGroups = groups.size();
     unsigned hw = std::thread::hardware_concurrency();
-    size_t nThreads = std::min<size_t>(nGroups, hw > 1 ? hw / 2 : 1);
+    // Half the cores by default: xatlas already used the machine on the
+    // previous stage, and --jobs exists to take it back when the box is idle.
+    size_t nThreads = o.jobs > 0 ? size_t(o.jobs) : (hw > 1 ? hw / 2 : 1);
+    nThreads = std::min(nThreads, nGroups);
     if (nThreads > 1 && nGroups > 1) {
         std::atomic<size_t> next{0};
         std::vector<std::thread> pool;

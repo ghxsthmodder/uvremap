@@ -256,6 +256,17 @@ autorização explícita.
                                       precisa quebrar o build em vez de virar
                                       um aviso.
 
+  `--jobs N`                          Quantas threads o bake de atlas usa
+                                      (padrão: metade dos núcleos). A unidade
+                                      de trabalho é um atlas, então o `N` só
+                                      move em `material` e `mesh`; em `scene`
+                                      há um atlas só e ele continua sendo
+                                      feito por uma thread. O resultado é byte
+                                      a byte o mesmo seja qual for o `N`: a
+                                      opção serve para devolver a máquina a
+                                      outro processo (`--jobs 1`) ou para usar
+                                      todos os núcleos numa caixa dedicada.
+
   `--format FORMAT`                   Formato do modelo de saída: `gltf`
                                       ou `glb`.
 

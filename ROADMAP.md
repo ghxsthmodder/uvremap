@@ -271,6 +271,17 @@ ficam para a `0.2.x` (ver M6).
    `fail-under: breach exits 5`, `breach publishes nothing`, `floor met exits 0`,
    `floor recorded in report`, e os dois casos de argumento inválido.
 5. **`--jobs N`** — tamanho do pool de threads do bake.
+   ✔ Concluído: `RegenOptions::jobs` fixa quantos workers o pool usa; sem a
+   flag continua o padrão (metade dos núcleos). A unidade de trabalho é o atlas,
+   então `--jobs` move em `material`/`mesh` e não muda nada em `scene` (um atlas
+   só). A ordem de merge já era determinística (relatório e estatísticas por
+   grupo), então mudar `N` não muda um byte: `ABeautifulGame` em
+   `material`/`256x256` produz os mesmos 56 PNGs com 1 e com 4 workers, e o par
+   em `512x512` com 1 e com 8 difere apenas pelo caminho gravado no
+   `report.txt`. Em `1024x1024` o mesmo tipo de par cai de 36,3s para 18,5s com
+   6 núcleos. Golden novos: os dois runs, a
+   comparação byte a byte, a garantia de que o modelo testado tem mais de um
+   atlas e `--jobs 0` → exit `2`.
 6. **Banda anti-costura em ilhas texturizadas.**
 7. **Modo lote** — vários arquivos de entrada.
 
