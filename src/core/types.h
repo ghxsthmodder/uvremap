@@ -41,12 +41,21 @@ struct TexTransform {
     double rotation = 0;  // radians, CCW around origin; applied before offset/scale
 };
 
+// Sampler wrap mode of a source texture. The bake follows it: models that tile
+// UVs past 1.0 (MF188 does, up to 5x) get the wrong atlas texels if a clamped
+// texture is sampled as repeating.
+enum class Wrap : uint8_t { Clamp, Repeat, Mirror };
+
 struct TextureRef {
     bool present = false;
     int imageIndex = -1;   // index into Model::images
     int texCoord = 0;      // TEXCOORD set used for sampling
     bool hasTransform = false;
     TexTransform transform;
+    // A texture with no sampler declared repeats (glTF spec, section Sampler);
+    // a declared sampler whose JSON omits the field defaults to clamp.
+    Wrap wrapS = Wrap::Repeat;
+    Wrap wrapT = Wrap::Repeat;
 };
 
 struct Material {

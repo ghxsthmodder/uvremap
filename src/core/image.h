@@ -30,11 +30,12 @@ bool imageFromRaster(const Raster& r, Image& img);
 
 enum class Filter { Nearest, Linear };
 
-// Samples normalized uv. Wrap: repeat (glTF default) or clamp.
+// Samples normalized uv, wrapping each axis per the texture's sampler.
 // out has 4 floats in [0,1] (raw stored bytes / 255).
-void samplePoint(const Raster& img, float u, float v, Filter f, bool repeat, float out[4]);
-void sampleBytes(int w, int h, const uint8_t* rgba, float u, float v, Filter f, bool repeat,
+void samplePoint(const Raster& img, float u, float v, Filter f, Wrap wrapS, Wrap wrapT,
                  float out[4]);
+void sampleBytes(int w, int h, const uint8_t* rgba, float u, float v, Filter f, Wrap wrapS,
+                 Wrap wrapT, float out[4]);
 
 // Mean color of all pixels (diagnostics).
 void meanColor(const Raster& img, float out[4]);

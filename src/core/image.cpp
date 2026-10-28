@@ -69,38 +69,42 @@ bool imageFromRaster(const Raster& r, Image& img) {
 }
 
 namespace {
-inline float wrap01(float v, bool repeat) {
-    if (repeat) {
-        v -= std::floor(v);
-        return v;
+// Maps a texel coordinate to the image, applying the sampler's wrap mode.
+// Coordinates stay raw: folding them here (rather than in uv space) keeps the
+// bilinear blend continuous across a repeat or mirror boundary.
+int wrapIndex(int i, int n, Wrap w) {
+    switch (w) {
+        case Wrap::Repeat:
+            return ((i % n) + n) % n;
+        case Wrap::Mirror: {
+            int p = ((i % (2 * n)) + 2 * n) % (2 * n);
+            return p < n ? p : 2 * n - 1 - p;
+        }
+        case Wrap::Clamp:
+            break;
     }
-    if (v < 0.f) return 0.f;
-    if (v > 1.f) return 1.f;
-    return v;
+    return i < 0 ? 0 : (i >= n ? n - 1 : i);
 }
 }  // namespace
 
-void samplePoint(const Raster& img, float u, float v, Filter f, bool repeat, float out[4]) {
-    sampleBytes(img.w, img.h, img.rgba.data(), u, v, f, repeat, out);
+void samplePoint(const Raster& img, float u, float v, Filter f, Wrap wrapS, Wrap wrapT,
+                 float out[4]) {
+    sampleBytes(img.w, img.h, img.rgba.data(), u, v, f, wrapS, wrapT, out);
 }
 
-void sampleBytes(int w, int h, const uint8_t* rgba, float u, float v, Filter f, bool repeat,
-                 float out[4]) {
+void sampleBytes(int w, int h, const uint8_t* rgba, float u, float v, Filter f, Wrap wrapS,
+                 Wrap wrapT, float out[4]) {
     if (w == 0 || h == 0) {
         out[0] = out[1] = out[2] = out[3] = 0.f;
         return;
     }
-    u = wrap01(u, repeat);
-    v = wrap01(v, repeat);
     auto pxAt = [&](int x, int y, float o[4]) {
         const uint8_t* p = rgba + (size_t(y) * w + x) * 4;
         for (int i = 0; i < 4; i++) o[i] = p[i] / 255.f;
     };
     if (f == Filter::Nearest) {
-        int x = int(u * w);
-        int y = int(v * h);
-        if (x >= w) x = w - 1;
-        if (y >= h) y = h - 1;
+        int x = wrapIndex(int(std::floor(u * w)), w, wrapS);
+        int y = wrapIndex(int(std::floor(v * h)), h, wrapT);
         pxAt(x, y, out);
         return;
     }
@@ -109,16 +113,7 @@ void sampleBytes(int w, int h, const uint8_t* rgba, float u, float v, Filter f, 
     float fy = v * h - 0.5f;
     float tx = fx - std::floor(fx), ty = fy - std::floor(fy);
     auto fetch = [&](int x, int y, float o[4]) {
-        if (repeat) {
-            x = ((x % w) + w) % w;
-            y = ((y % h) + h) % h;
-        } else {
-            if (x < 0) x = 0;
-            if (x >= w) x = w - 1;
-            if (y < 0) y = 0;
-            if (y >= h) y = h - 1;
-        }
-        pxAt(x, y, o);
+        pxAt(wrapIndex(x, w, wrapS), wrapIndex(y, h, wrapT), o);
     };
     int x0 = int(std::floor(fx)), y0 = int(std::floor(fy));
     float c00[4], c10[4], c01[4], c11[4];

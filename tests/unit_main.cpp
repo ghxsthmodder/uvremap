@@ -58,16 +58,37 @@ static void testNormalFlatRotation() {
 }
 
 static void testSampling() {
+    // Distinct texel per corner so the wrap mode is observable.
     Raster r;
     r.resize(2, 2);
-    r.fill(10, 20, 30, 255);
+    r.pixel(0, 0)[0] = 10;
+    r.pixel(1, 0)[0] = 20;
+    r.pixel(0, 1)[0] = 30;
+    r.pixel(1, 1)[0] = 40;
+    for (size_t i = 0; i < r.rgba.size(); i += 4) r.rgba[i + 3] = 255;
     float out[4];
-    samplePoint(r, 0.25f, 0.25f, Filter::Nearest, false, out);
+    samplePoint(r, 0.25f, 0.25f, Filter::Nearest, Wrap::Clamp, Wrap::Clamp, out);
     CHECK(std::fabs(out[0] * 255.f - 10.f) < 1.f);
     CHECK(std::fabs(out[3] - 1.f) < 1e-6f);
-    // uv=1.0 with repeat wraps to same image
-    samplePoint(r, 1.0f, 1.0f, Filter::Nearest, true, out);
-    CHECK(std::fabs(out[2] * 255.f - 30.f) < 1.f);
+    // u=1.25: repeat tiles back to the left column, clamp keeps the right one.
+    samplePoint(r, 1.25f, 0.25f, Filter::Nearest, Wrap::Repeat, Wrap::Repeat, out);
+    CHECK(std::fabs(out[0] * 255.f - 10.f) < 1.f);
+    samplePoint(r, 1.25f, 0.25f, Filter::Nearest, Wrap::Clamp, Wrap::Clamp, out);
+    CHECK(std::fabs(out[0] * 255.f - 20.f) < 1.f);
+    // u=1.75: mirrored repeat folds back into the left column too.
+    samplePoint(r, 1.75f, 0.25f, Filter::Nearest, Wrap::Mirror, Wrap::Mirror, out);
+    CHECK(std::fabs(out[0] * 255.f - 10.f) < 1.f);
+    samplePoint(r, 1.75f, 0.25f, Filter::Nearest, Wrap::Repeat, Wrap::Repeat, out);
+    CHECK(std::fabs(out[0] * 255.f - 20.f) < 1.f);
+    // uv=1.0 with repeat wraps onto the first texel of the row.
+    samplePoint(r, 1.0f, 1.0f, Filter::Nearest, Wrap::Repeat, Wrap::Repeat, out);
+    CHECK(std::fabs(out[0] * 255.f - 10.f) < 1.f);
+    // Bilinear across the u=1 edge: clamp blends the edge texel with itself,
+    // so the result stays on the right column; repeat would pull in the left.
+    samplePoint(r, 0.99f, 0.25f, Filter::Linear, Wrap::Clamp, Wrap::Clamp, out);
+    CHECK(out[0] * 255.f > 15.f);
+    samplePoint(r, 1.01f, 0.25f, Filter::Linear, Wrap::Repeat, Wrap::Repeat, out);
+    CHECK(out[0] * 255.f < 15.f);
 }
 
 static void testNeutral() {
@@ -310,6 +331,102 @@ static void testTextureTransformRotation() {
     // With the spec transform only the TR (green) quadrant is sampled.
     CHECK(rotTotal > 0);
     CHECK(rotCounts[1] * 10 >= rotTotal * 9);
+}
+
+static void testClampWrapBake() {
+    // MF188 regression: UVs that tile past 1.0 must follow the sampler. The
+    // source image is the last column's color everywhere but its left half, so
+    // clamping fills the second tile with that column while repeating tiles the
+    // pattern again.
+    Model model;
+    model.inputPath = "synthetic";
+    Primitive p;
+    p.meshIndex = 0;
+    p.primIndex = 0;
+    p.material = 0;
+    const V3 pos[4] = {{0, 0, 0}, {2, 0, 0}, {2, 1, 0}, {0, 1, 0}};
+    const V2 uv[4] = {{0, 0}, {2, 0}, {2, 1}, {0, 1}};
+    for (int c = 0; c < 4; c++) {
+        SourceVertex v;
+        v.position = pos[c];
+        v.hasNormal = true;
+        v.normal = {0, 0, 1};
+        v.uvsets.push_back(uv[c]);
+        p.vertices.push_back(v);
+    }
+    p.indices = {0, 1, 2, 0, 2, 3};
+    model.primitives.push_back(std::move(p));
+
+    Image img;
+    img.name = "stripes";
+    img.w = 8;
+    img.h = 4;
+    img.decoded = true;
+    img.rgba.assign(8 * 4 * 4, 0);
+    for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 8; x++) {
+            uint8_t* q = &img.rgba[(y * 8 + x) * 4];
+            if (x == 7) q[0] = 255;  // clamp edge: red column
+            else if (x == 0) q[2] = 255;  // blue first column
+            else q[1] = 255;              // green body
+            q[3] = 255;
+        }
+    model.images.push_back(std::move(img));
+    Material m;
+    m.name = "m0";
+    TextureRef& ref = m.tex[int(TexType::BaseColor)];
+    ref.present = true;
+    ref.imageIndex = 0;
+    ref.texCoord = 0;
+    model.materials.push_back(m);
+
+    AtlasGroup group;
+    group.id = 0;
+    group.name = "t";
+    group.primitives = {0};
+    group.materials = {0};
+    GenOptions go;
+    go.resolutionW = go.resolutionH = 64;
+    go.padding = 1;
+
+    auto bake = [&](Wrap w, int counts[3]) {
+        counts[0] = counts[1] = counts[2] = 0;  // red, green, blue
+        model.materials[0].tex[int(TexType::BaseColor)].wrapS = w;
+        model.materials[0].tex[int(TexType::BaseColor)].wrapT = w;
+        Report rep;
+        std::string err;
+        AtlasGen gen;
+        CHECK(generateAtlas(model, group, 0, go, gen, rep, err));
+        BakeOptions bo;
+        bo.filter = Filter::Nearest;
+        std::vector<BakedImage> baked;
+        CHECK(bakeGroup(model, group, gen, bo, baked, rep, err));
+        for (const BakedImage& b : baked) {
+            if (b.type != TexType::BaseColor) continue;
+            Raster sc;
+            const std::vector<uint8_t>& rgba = bakedRgba(b, sc);
+            for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
+                if (rgba[i + 3] == 0) continue;
+                if (rgba[i] > 180 && rgba[i + 1] < 80) counts[0]++;
+                else if (rgba[i + 1] > 180) counts[1]++;
+                else if (rgba[i + 2] > 180) counts[2]++;
+            }
+        }
+    };
+
+    int clampC[3], repeatC[3];
+    bake(Wrap::Clamp, clampC);
+    bake(Wrap::Repeat, repeatC);
+    int clampTotal = clampC[0] + clampC[1] + clampC[2];
+    int repeatTotal = repeatC[0] + repeatC[1] + repeatC[2];
+    CHECK(clampTotal > 0 && repeatTotal > 0);
+    // Half the quad samples u in [1,2]: clamped it is all edge red; repeated it
+    // re-tiles the pattern, so only the first tile's edge sliver stays red.
+    CHECK(clampC[0] * 2 >= clampTotal);
+    CHECK(repeatC[0] * 4 < repeatTotal);
+    // The first column only tiles back into view when the texture repeats, so
+    // the repeated atlas shows roughly twice as much blue as the clamped one.
+    CHECK(repeatC[2] > clampC[2] * 3 / 2);
 }
 
 static void testMaterialsVariantsBake() {
@@ -853,6 +970,50 @@ static void testExtTexCoordDetection() {
     }
 }
 
+// The bake must follow each texture's sampler: a declared sampler defaults to
+// clamp, a texture without one repeats, and mirrored repeat is its own mode.
+static void testSamplerWrapLoad() {
+    const char* path = "unit_sampler_wrap.gltf";
+    {
+        std::ofstream f(path);
+        f << R"json({
+"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],
+"meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1,"TEXCOORD_1":2},
+"indices":3,"material":0}]}],
+"materials":[{"name":"m","occlusionTexture":{"index":2},"emissiveTexture":{"index":3},
+"pbrMetallicRoughness":{"baseColorTexture":{"index":0},
+"metallicRoughnessTexture":{"index":1}}}],
+"textures":[{"source":0,"sampler":0},{"source":0},{"source":0,"sampler":1},
+{"source":0,"sampler":2}],
+"samplers":[{"wrapS":10497,"wrapT":10497},{"magFilter":9729},
+{"wrapS":10498,"wrapT":10498}],
+"images":[{"uri":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC"}],
+"buffers":[{"byteLength":96,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAAA/AAAAAAAAAAAAAIA+AAAAAAEAAAACAAAA"}],
+"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36,"target":34962},
+{"buffer":0,"byteOffset":36,"byteLength":24,"target":34962},
+{"buffer":0,"byteOffset":60,"byteLength":24,"target":34962},
+{"buffer":0,"byteOffset":84,"byteLength":12,"target":34963}],
+"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]},
+{"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"},
+{"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},
+{"bufferView":3,"componentType":5125,"count":3,"type":"SCALAR"}]
+})json";
+    }
+    Model model;
+    GltfDocument doc;
+    Report rep;
+    std::string err;
+    CHECK(doc.load(path, model, rep, err));
+    std::remove(path);
+    CHECK(model.materials.size() == 1);
+    if (model.materials.size() != 1) return;
+    const Material& m = model.materials[0];
+    CHECK(m.tex[int(TexType::BaseColor)].wrapS == Wrap::Clamp);
+    CHECK(m.tex[int(TexType::MetallicRoughness)].wrapS == Wrap::Repeat);
+    CHECK(m.tex[int(TexType::Occlusion)].wrapT == Wrap::Clamp);
+    CHECK(m.tex[int(TexType::Emissive)].wrapS == Wrap::Mirror);
+}
+
 static void testRenderJson() {
     Report rep;
     rep.stats.primitivesTotal = 3;
@@ -883,6 +1044,7 @@ int main() {
     testTriangulate();
     testColocalTwinRegression();
     testTextureTransformRotation();
+    testClampWrapBake();
     testMaterialsVariantsBake();
     testBakeFactors();
     testSharedFactorBake();
@@ -892,6 +1054,7 @@ int main() {
     testSelfCheck();
     testPreviewRenderers();
     testExtTexCoordDetection();
+    testSamplerWrapLoad();
     testRenderJson();
     if (failures) {
         std::printf("%d check(s) failed\n", failures);

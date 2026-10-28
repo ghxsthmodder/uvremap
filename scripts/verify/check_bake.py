@@ -9,7 +9,8 @@ UV and the original texture at the source UV and checks agreement.
 Usage: check_bake.py <output.gltf|output.glb> <original_basecolor.png> [input.gltf|input.glb]
 Exit 0 when >=90% of covered sample points agree. When the input model is
 given, its materials' KHR_texture_transform (matched by material name) is
-applied to source UVs before sampling the original texture.
+applied to source UVs and the wrap mode of the source texture's sampler is
+followed when sampling the original texture.
 """
 import base64, io, json, math, os, struct, sys
 
@@ -89,10 +90,27 @@ def to_img(arr):
     return np.array(Image.open(io.BytesIO(arr)).convert('RGB'), dtype=np.float64)
 
 
-def sample_nearest(img, u, v):
+# glTF wrap codes: 33071/10497 clamp, 33648/10498 mirrored, 10499 repeat.
+WRAPCODES = {33071: 'clamp', 10497: 'clamp', 33648: 'mirror', 10498: 'mirror',
+             10499: 'repeat'}
+# A texture with no sampler is implementation-defined; every renderer we know
+# repeats, and so does the bake.
+REPEAT_WRAP = ('repeat', 'repeat')
+
+
+def fold(x, mode):
+    if mode == 'repeat':
+        return x % 1.0
+    if mode == 'mirror':
+        p = x % 2.0
+        return p if p < 1.0 else 2.0 - p
+    return x
+
+
+def sample_nearest(img, u, v, wrap):
     h, w = img.shape[:2]
-    x = int(np.clip(u * w, 0, w - 1))
-    y = int(np.clip(v * h, 0, h - 1))
+    x = int(np.clip(fold(u, wrap[0]) * w, 0, w - 1))
+    y = int(np.clip(fold(v, wrap[1]) * h, 0, h - 1))
     return img[y, x]
 
 
@@ -102,6 +120,16 @@ def apply_transform(uv, off, scale, rot):
         c, s = math.cos(rot), math.sin(rot)
         u, v = u * c - v * s, u * s + v * c
     return (u + off[0], v + off[1])
+
+
+def sampler_wrap(j2, tex):
+    """(wrapS, wrapT) of a texture entry, per the spec's defaults."""
+    s = tex.get('sampler')
+    if s is None or 'samplers' not in j2:
+        return REPEAT_WRAP
+    sm = j2['samplers'][s]
+    return tuple(WRAPCODES.get(sm.get(k, 10497), 'clamp')
+                 for k in ('wrapS', 'wrapT'))
 
 
 def tex_transforms(p):
@@ -124,7 +152,8 @@ def tex_transforms(p):
             continue
         if bt:
             kt = (bt.get('extensions') or {}).get('KHR_texture_transform', {})
-            src = j2['textures'][bt['index']]['source']
+            tex = j2['textures'][bt['index']]
+            src = tex['source']
             if src not in img_cache:
                 img_cache[src] = image_bytes(j2, src, base2)
             out.setdefault(m.get('name', ''), []).append(dict(
@@ -132,6 +161,7 @@ def tex_transforms(p):
                 scale=kt.get('scale', [1.0, 1.0]),
                 rot=kt.get('rotation', 0.0),
                 tc=kt.get('texCoord', bt.get('texCoord', 0)),
+                wrap=sampler_wrap(j2, tex),
                 img=img_cache[src]))
         else:
             out.setdefault(m.get('name', ''), []).append(dict(factor=factor))
@@ -217,10 +247,13 @@ for p_idx, mesh in enumerate(j.get('meshes', [])):
                 continue
             ua = w[0] * uv1[a, :2] + w[1] * uv1[b, :2] + w[2] * uv1[c, :2]
             us = w[0] * uv0[a, :2] + w[1] * uv0[b, :2] + w[2] * uv0[c, :2]
-            pa = sample_nearest(atlas, ua[0], ua[1])
+            pa = sample_nearest(atlas, ua[0], ua[1], REPEAT_WRAP)
             su = us if is_factor else (apply_transform(us, tf['off'], tf['scale'], tf['rot'])
                                        if tf else us)
-            ps = sample_nearest(orig_arr, su[0] % 1.0, su[1] % 1.0)
+            # A baked factor has no source texture to wrap; an input model we
+            # could not match leaves the mode implementation-defined.
+            ps = sample_nearest(orig_arr, su[0], su[1],
+                                tf['wrap'] if (tf and not is_factor) else REPEAT_WRAP)
             n_tot += 1
             if np.abs(pa - ps).max() < 40:
                 n_ok += 1

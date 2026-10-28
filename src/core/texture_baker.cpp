@@ -126,6 +126,7 @@ bool barycentric(const float p[2], const float v0[2], const float v1[2], const f
 struct PerType {
     const Image* image = nullptr;  // source image for this triangle's material
     const TexTransform* xform = nullptr;
+    Wrap wrapS = Wrap::Repeat, wrapT = Wrap::Repeat;  // sampler of the source texture
     int uvSet = -1;                // source TEXCOORD index, -1 = unavailable
     V2 su[3];                      // transformed source UVs, new-triangle corner order
     TriFrame srcFrame;
@@ -380,6 +381,8 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                     PerType& p = pt[t];
                     p.image = &model.images[ref.imageIndex];
                     p.xform = &ref.transform;
+                    p.wrapS = ref.wrapS;
+                    p.wrapT = ref.wrapT;
                     int uvSet = ref.texCoord;
                     if (size_t(uvSet) >= uvSets) uvSet = opt.sourceUv;
                     if (size_t(uvSet) >= uvSets) continue;  // no coordinates to sample with
@@ -455,7 +458,7 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                                        w[2] * pt[t].su[2].v};
                             float px[4];
                             sampleBytes(pt[t].image->w, pt[t].image->h, pt[t].image->rgba.data(),
-                                        suv.u, suv.v, opt.filter, true, px);
+                                        suv.u, suv.v, opt.filter, pt[t].wrapS, pt[t].wrapT, px);
                             uint8_t* dst = rowBase[t] + size_t(x) * 4;
                             if (t == int(TexType::Normal)) {
                                 if (!pt[t].useFrame) continue;
@@ -649,6 +652,26 @@ bool selfCheckGroup(const Model& model, const AtlasGroup& group, const AtlasGen&
         }
     }
 
+    // Weight the sample pick by each triangle's footprint in the atlas. A
+    // triangle that collapses to a sliver holds no representative texel, and
+    // drawing triangles uniformly spends samples on gutter pixels instead.
+    std::vector<double> triWeight;
+    triWeight.reserve(tris.size());
+    double totalWeight = 0.0;
+    for (const Tri& tri : tris) {
+        const GenMesh& gm = gen.meshes[tri.gmIdx];
+        const GenVertex* gv[3] = {&gm.vertices[gm.indices[tri.f]],
+                                  &gm.vertices[gm.indices[tri.f + 1]],
+                                  &gm.vertices[gm.indices[tri.f + 2]]};
+        float dx1 = gv[1]->u * scaleX - gv[0]->u * scaleX;
+        float dy1 = gv[1]->v * scaleY - gv[0]->v * scaleY;
+        float dx2 = gv[2]->u * scaleX - gv[0]->u * scaleX;
+        float dy2 = gv[2]->v * scaleY - gv[0]->v * scaleY;
+        double area = 0.5 * std::fabs(dx1 * dy2 - dy1 * dx2);
+        triWeight.push_back(area);
+        totalWeight += area;
+    }
+
     for (const BakedImage& b : baked) {
         const int t = int(b.type);
         if (b.type == TexType::Normal) {
@@ -674,8 +697,13 @@ bool selfCheckGroup(const Model& model, const AtlasGroup& group, const AtlasGen&
         }
         const std::vector<uint8_t>& atlasPx =
             b.image.rgba.empty() ? decoded.rgba : b.image.rgba;
+        if (totalWeight <= 0.0) {
+            report.info("self-check '" + group.name + "' " + texTypeName(b.type) +
+                        ": no area-mappable triangles");
+            continue;
+        }
         std::mt19937 rng(7u + size_t(b.material) * 131u + size_t(t) * 17u);
-        std::uniform_int_distribution<size_t> pick(0, tris.size() - 1);
+        std::discrete_distribution<size_t> pick(triWeight.begin(), triWeight.end());
         std::uniform_real_distribution<float> urand(0.f, 1.f);
         int ok = 0, n = 0, skip = 0;
         for (int s = 0; s < nSamples; s++) {
@@ -714,6 +742,30 @@ bool selfCheckGroup(const Model& model, const AtlasGroup& group, const AtlasGen&
             int py = int(std::clamp(av * scaleY, 0.f, float(texH - 1)));
             py += std::max(0, gv[0]->atlasIndex) * texH;
             if (py >= b.image.h) continue;
+
+            // The bake wrote one source sample per atlas texel, taken at the
+            // texel centre, so the expectation has to be read at that same
+            // centre: comparing an arbitrary point inside the texel against a
+            // chart minified below its source resolution can never agree.
+            float ew[3] = {w[0], w[1], w[2]};
+            {
+                const float x0 = gv[0]->u * scaleX, y0 = gv[0]->v * scaleY;
+                const float rx = float(px) + 0.5f - x0;
+                const float ry = float(py - std::max(0, gv[0]->atlasIndex) * texH) + 0.5f - y0;
+                const float dx1 = gv[1]->u * scaleX - x0, dy1 = gv[1]->v * scaleY - y0;
+                const float dx2 = gv[2]->u * scaleX - x0, dy2 = gv[2]->v * scaleY - y0;
+                const float det = dx1 * dy2 - dy1 * dx2;
+                if (std::fabs(det) > 1e-12f) {
+                    float b1 = (rx * dy2 - ry * dx2) / det;
+                    float b2 = (dx1 * ry - dy1 * rx) / det;
+                    float b0 = 1.f - b1 - b2;
+                    if (b0 >= -1e-3f && b1 >= -1e-3f && b2 >= -1e-3f) {
+                        ew[0] = b0;
+                        ew[1] = b1;
+                        ew[2] = b2;
+                    }
+                }
+            }
             const uint8_t* bk = &atlasPx[(size_t(py) * b.image.w + px) * 4];
 
             // Expected source texel.
@@ -737,12 +789,12 @@ bool selfCheckGroup(const Model& model, const AtlasGroup& group, const AtlasGen&
                                 prim.vertices.size() - 1)];
                         V2 raw = sv.uvsets[uvSet];
                         V2 st = transformUv(raw, ref.transform);
-                        suv.u += w[c] * st.u;
-                        suv.v += w[c] * st.v;
+                        suv.u += ew[c] * st.u;
+                        suv.v += ew[c] * st.v;
                     }
                     float got[4];
-                    sampleBytes(src.w, src.h, src.rgba.data(), suv.u, suv.v, Filter::Nearest, true,
-                                got);
+                    sampleBytes(src.w, src.h, src.rgba.data(), suv.u, suv.v, Filter::Nearest,
+                                ref.wrapS, ref.wrapT, got);
                     for (int i = 0; i < 4; i++) exp[i] = got[i] * 255.f;
                     have = true;
                 }

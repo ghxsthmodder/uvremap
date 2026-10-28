@@ -457,6 +457,15 @@ bool rawImageBytes(const tinygltf::Model& m, const tinygltf::Image& img,
     return false;
 }
 
+// glTF sampler wrap codes (10497 clamp, 10498 mirrored, 10499 repeat).
+Wrap wrapFromCode(int code) {
+    switch (code) {
+        case 10499: return Wrap::Repeat;
+        case 10498: return Wrap::Mirror;
+        default: return Wrap::Clamp;
+    }
+}
+
 // Reads one texture slot (TextureInfo/Normal/Occlusion) into a TextureRef.
 template <typename TI>
 void readTextureSlot(const tinygltf::Model& m, const TI& ti,
@@ -466,6 +475,11 @@ void readTextureSlot(const tinygltf::Model& m, const TI& ti,
     ref.texCoord = ti.texCoord;
     const tinygltf::Texture& tex = m.textures[ti.index];
     ref.imageIndex = tex.source;
+    if (tex.sampler >= 0 && size_t(tex.sampler) < m.samplers.size()) {
+        const tinygltf::Sampler& s = m.samplers[tex.sampler];
+        ref.wrapS = wrapFromCode(s.wrapS);
+        ref.wrapT = wrapFromCode(s.wrapT);
+    }
     parseTexTransform(ti, ref);
 }
 

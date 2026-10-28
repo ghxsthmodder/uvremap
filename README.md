@@ -225,16 +225,24 @@ autorização explícita.
                                       neutro do atlas; emissivo nulo
                                       continua sem imagem.
 
-  `--self-check N`                    Amostra N pontos aleatórios por
+  `--self-check N`                    Amostra N texels aleatórios por
                                       imagem reconstruída e confere a
                                       concordância com a textura de origem
                                       (percentuais no `report.txt`; mapas
                                       de normal são pulados, pois o rebake
                                       em quadro tangente não é comparável
-                                      texel a texel). Sem `--bake-factors`
-                                      os canais cujo valor ficou apenas no
-                                      material são excluídos da contagem,
-                                      pois não há o que comparar.
+                                      texel a texel). Os triângulos entram
+                                      na amostragem ponderados pela área
+                                      que ocupam no atlas, e o valor
+                                      esperado é lido no centro do texel
+                                      amostrado — o mesmo ponto que o bake
+                                      consultou —, porque uma ilha menor
+                                      que a sua textura de origem não
+                                      pode reproduzir o texel a texel. Sem
+                                      `--bake-factors` os canais cujo valor
+                                      ficou apenas no material são excluídos
+                                      da contagem, pois não há o que
+                                      comparar.
 
   `--format FORMAT`                   Formato do modelo de saída: `gltf`
                                       ou `glb`.
@@ -383,6 +391,15 @@ todas as imagens.
                                       alterações destrutivas sempre que
                                       possível.
   -----------------------------------------------------------------------
+
+A amostragem da textura de origem segue o **modo de wrap do sampler**
+declarado para cada textura: `CLAMP_TO_EDGE`, `REPEAT` ou
+`MIRRORED_REPEAT`. Uma textura sem sampler é amostrada com repetição,
+que é o que a especificação deixa a critério da implementação; um sampler
+declarado sem os campos de wrap usa o padrão `CLAMP_TO_EDGE`. Modelos que
+estendem as UVs para além de 1,0 (mosaicos, decalques) dependem disso:
+amostrar como repetição uma textura declarada com borda fixa troca o
+conteúdo de meia ilha por pixels do lado oposto da imagem.
 
 A transferência deverá considerar também texturas compartilhadas entre
 materiais, transformações de textura, canais UV utilizados e parâmetros

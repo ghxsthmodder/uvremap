@@ -4,8 +4,8 @@ Estado: Fases 1–4 do README implementadas e verificados (golden 302/302, relea
 v0.1.0–v0.1.9 com windows-x64 / linux-x86_64 / linux-aarch64 / android-arm64).
 M0 concluído (v0.1.3); M1 concluído (v0.1.5); M2 concluído (multi-página e
 não-quadrado; v0.1.5 + pending); M3 concluído (itens 1–4); M4 itens 1–5
-concluídos (item 1 na v0.1.8, itens 2–5 na v0.1.9). Prioridades abaixo
-por impacto e risco.
+concluídos (item 1 na v0.1.8, itens 2–5 na v0.1.9); M5 em andamento (fecha a
+série 0.1.x na v0.1.10). Prioridades abaixo por impacto e risco.
 
 ## Política de versionamento
 
@@ -199,6 +199,65 @@ concluídos (ver abaixo), a lançar. M1 completo.
    `ibreler`), self-check basecolor 399/400. Unit test `testNeutralIslandBake`,
    guardas no contador de amostras sem comparação (golden 302/302, privado
    8/8) e terceiro material sem fator nenhum em `make_factor_model.py`.
+
+## M5 — Exatidão e diagnóstico de fechamento (v0.1.10)
+
+Escopo acordado para encerrar a série `0.1.x`; `KHR_texture_basisu` e mipmaps
+ficam para a `0.2.x` (ver M6).
+
+1. **Wrap do sampler ignorado no bake** — achado ao investigar a divergência de
+   oclusão do MF188 (self-check 76%): `sampleBytes` era sempre chamada com
+   `repeat=true`, mas quase todos os modelos declaram `CLAMP_TO_EDGE`
+   (10497) — inclusive toda a banca Khronos com mapas de oclusão. Modelos que
+   estendem as UVs além de 1,0 (MF188 chega a 5,4) amostravam o lado oposto da
+   textura de origem.
+   ✔ Concluído: `TextureRef` carrega `wrapS`/`wrapT` resolvidos na carga
+   (`readTextureSlot`): sampler declarado → código do JSON, com padrão
+   `CLAMP_TO_EDGE`; textura sem sampler → `REPEAT`, como diz a spec. O bake e o
+   `--self-check` amostram pelo modo declarado e `sampleBytes` implementa as
+   três modalidades (inclusive `MIRRORED_REPEAT`) no nearest e no bilinear.
+   MF188: oclusão 76% → 97,4%, basecolor 99,9%, metallic-roughness 100%.
+   Unit tests `testSamplerWrapLoad` (carga), `testSampling` (nearest/bilinear ×
+   clamp/repeat/mirror) e `testClampWrapBake` (ilha com UV 0..2: com clamp o
+   atlas repete a coluna de borda, com repeat mosaica a textura).
+   Golden: o `DamagedHelmet` tem UVs até 1,9986 em V e declara um `sampler`
+   vazio, que pela spec é `CLAMP_TO_EDGE` — o bake então deixou de concordar
+   com o `check_bake.py`, que amostrava a origem sempre em `REPEAT` (`uv % 1`).
+   Era o verificador que estava errado, não o bake: seguindo o sampler declarado
+   as duas marcas sobem de 94%/93% (M2.1/M2.2) para 95,9%/95,5%. O verificador
+   agora resolve `wrapS`/`wrapT` do modelo de entrada (mesmos padrões da spec)
+   e continua em `REPEAT` quando o modelo não declara sampler. Golden 302/302,
+   privado 8/8, unitários passando.
+2. **`--self-check` media errado** — as sobras depois do wrap não eram defeito
+   de bake: a amostragem escolhia triângulos com distribuição uniforme, dando o
+   mesmo peso a triângulos que colapsam a frações de texel no atlas — nesses a
+   leitura cai no gutter neutro e nunca pode concordar — e comparava o texel do
+   atlas contra a origem no ponto aleatório, quando o bake grava uma amostra do
+   **centro** do texel. Uma ilha menor que a sua textura de origem era, por
+   construção, rejeitada (no MF188, `vida`: AO de 512x512 em ~180 texels).
+   ✔ Concluído: escolha ponderada pela área no atlas (`std::discrete_distribution`)
+   e expectativa relida no centro do texel amostrado, via baricêntricas do ponto
+   de destino. Verificado por rasterização densa: 0,1% do footprint de `govde`
+   sobrava em preenchimento neutro, ou seja, o bake não tinha buracos — a métrica
+   é que estava errada.
+3. **Ocupação e densidade de texels no relatório** (`report.txt` + `--json`).
+4. **`--fail-under N`** — exit code quando a concordância do self-check cai
+   abaixo do piso.
+5. **`--jobs N`** — tamanho do pool de threads do bake.
+6. **Banda anti-costura em ilhas texturizadas.**
+7. **Modo lote** — vários arquivos de entrada.
+
+## M6 — Texturas comprimidas e mipmaps (0.2.x, adiado da 0.1.10)
+
+1. **`KHR_texture_basisu`** — hoje um arquivo que exige KTX2/Basis é tratado
+   como os de draco/meshopt (recusado na carga, exit 3). Para a 0.2.x: transcodificar
+   (basisu/`toktx` embutido) e, no export, reempacotar as imagens do atlas em
+   KTX2 com os mesmos canais, preservando `sampler`/`texCoord`.
+2. **Mipmaps** — as imagens do atlas saem sem cadeia de níveis; `TextureSettingsTest`
+   e afins declaram `minFilter` mipados, então o resultado visual muda em superfícies
+   minificadas (o mesmo regime que produz a divergência medida no item M5.2).
+   Decidir: gerar mipos no export (filtro glTF: box por nível, com o gutter de
+   padding) ou documentar a limitação e avisar quando o `minFilter` do modelo pede mip.
 
 ## Infra recorrente (a cada release)
 
