@@ -3,6 +3,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <new>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -524,6 +525,10 @@ int run(int argc, char** argv) {
 int main(int argc, char** argv) {
     try {
         return run(argc, argv);
+    } catch (const std::bad_alloc&) {
+        std::cerr << "uvremap: out of memory. Try a smaller --resolution (e.g. 1024x1024) "
+                     "or free up RAM.\n";
+        return 1;
     } catch (const std::exception& e) {
         std::cerr << "uvremap: internal error: " << e.what() << "\n";
         return 1;

@@ -23,6 +23,15 @@ static int failures = 0;
 
 using namespace uvremap;
 
+// Baked images are stored PNG-encoded (b.image.rgba empty, b.image.raw set);
+// decode back to RGBA for pixel assertions in tests.
+static const std::vector<uint8_t>& bakedRgba(const BakedImage& b, Raster& scratch) {
+    if (!b.image.rgba.empty()) return b.image.rgba;
+    static std::string derr;
+    decodeImage(b.image.raw, scratch, derr);
+    return scratch.rgba;
+}
+
 static void testNormalIdentity() {
     // Same parametrization in and out => rebake must be (almost) identity.
     V3 p[3] = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
@@ -171,10 +180,11 @@ static void testColocalTwinRegression() {
     for (const BakedImage& b : baked) {
         if (b.type != TexType::BaseColor) continue;
         sawBaseColor = true;
-        const Image& imgOut = b.image;
+        Raster sc;
+        const std::vector<uint8_t>& imgOut = bakedRgba(b, sc);
         int red = 0;
-        for (size_t i = 0; i + 3 < imgOut.rgba.size(); i += 4)
-            if (imgOut.rgba[i] > 200 && imgOut.rgba[i + 1] < 60 && imgOut.rgba[i + 2] < 60)
+        for (size_t i = 0; i + 3 < imgOut.size(); i += 4)
+            if (imgOut[i] > 200 && imgOut[i + 1] < 60 && imgOut[i + 2] < 60)
                 red++;
         CHECK(red > 0);
     }
@@ -276,10 +286,11 @@ static void testTextureTransformRotation() {
         int total = 0;
         for (const BakedImage& b : baked) {
             if (b.type != TexType::BaseColor) continue;
-            const Image& im = b.image;
-            for (size_t i = 0; i + 3 < im.rgba.size(); i += 4) {
-                if (im.rgba[i + 3] == 0) continue;  // neutral fill
-                int r = im.rgba[i], g = im.rgba[i + 1], b2 = im.rgba[i + 2];
+            Raster sc;
+            const std::vector<uint8_t>& rgba = bakedRgba(b, sc);
+            for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
+                if (rgba[i + 3] == 0) continue;  // neutral fill
+                int r = rgba[i], g = rgba[i + 1], b2 = rgba[i + 2];
                 if (r > 180 && g < 80 && b2 < 80) counts[0]++;
                 else if (g > 180 && r < 80 && b2 < 80) counts[1]++;
                 else if (b2 > 180 && r < 80 && g < 80) counts[2]++;
@@ -355,9 +366,11 @@ static void testMaterialsVariantsBake() {
         copies[b.material]++;
         int wanted = b.material;  // green channel for mat 1, red for mat 0
         int hits = 0, wrong = 0;
-        for (size_t i = 0; i + 3 < b.image.rgba.size(); i += 4) {
-            if (b.image.rgba[i + 3] == 0) continue;
-            if (b.image.rgba[i + wanted] > 200 && b.image.rgba[i + (1 - wanted)] < 60)
+        Raster sc;
+        const std::vector<uint8_t>& rgba = bakedRgba(b, sc);
+        for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
+            if (rgba[i + 3] == 0) continue;
+            if (rgba[i + wanted] > 200 && rgba[i + (1 - wanted)] < 60)
                 hits++;
             else
                 wrong++;
@@ -424,10 +437,12 @@ static void testBakeFactors() {
             CHECK(b.material >= 0);
             CHECK(b.factorBaked & factorBit(TexType::BaseColor));
             int hits = 0;
-            for (size_t i = 0; i + 3 < b.image.rgba.size(); i += 4) {
-                if (b.image.rgba[i + 3] == 0) continue;
-                bool m0 = b.image.rgba[i] > 180 && b.image.rgba[i + 1] < 70;
-                bool m1 = b.image.rgba[i + 1] > 180 && b.image.rgba[i] < 70;
+            Raster sc;
+            const std::vector<uint8_t>& rgba = bakedRgba(b, sc);
+            for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
+                if (rgba[i + 3] == 0) continue;
+                bool m0 = rgba[i] > 180 && rgba[i + 1] < 70;
+                bool m1 = rgba[i + 1] > 180 && rgba[i] < 70;
                 if ((b.material == 0 && m0) || (b.material == 1 && m1)) hits++;
             }
             CHECK(hits > 0);
@@ -512,11 +527,13 @@ static void testMultiPageAtlas() {
         CHECK(b.image.w == gen.width);
         CHECK(b.image.h == gen.height * gen.pageCount);
         int greenPages = 0;
+        Raster sc;
+        const std::vector<uint8_t>& rgba = bakedRgba(b, sc);
         for (int p = 0; p < gen.pageCount; p++) {
             bool green = false;
             for (int y = p * gen.height; y < (p + 1) * gen.height && !green; y++)
                 for (int x = 0; x < gen.width && !green; x++) {
-                    const uint8_t* px = &b.image.rgba[(size_t(y) * gen.width + x) * 4];
+                    const uint8_t* px = &rgba[(size_t(y) * gen.width + x) * 4];
                     if (px[1] > 180 && px[0] < 60) green = true;
                 }
             if (green) greenPages++;

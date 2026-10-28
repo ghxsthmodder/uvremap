@@ -845,12 +845,16 @@ bool GltfDocument::save(const Model& core, const std::vector<AtlasOutput>& atlas
         if (bi.material >= 0) base += "_mat" + std::to_string(bi.material);
         const Image& img = bi.image;
         int imageIdx = -1;
-        Raster r;
-        r.w = img.w;
-        r.h = img.h;
-        r.rgba = img.rgba;
         std::vector<uint8_t> png;
-        if (!encodePng(r, png)) return -1;
+        if (!img.raw.empty()) {
+            png = img.raw;  // baked images arrive PNG-encoded (memory)
+        } else {
+            Raster r;
+            r.w = img.w;
+            r.h = img.h;
+            r.rgba = img.rgba;
+            if (!encodePng(r, png)) return -1;
+        }
         if (opt.binary) {
             bw.appendRaw(png.data(), png.size());
             tinygltf::BufferView bv;

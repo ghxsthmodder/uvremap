@@ -445,8 +445,13 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
                     "first occurrence used");
 
     // Emit one image per (material, type): all pages stacked vertically,
-    // untouched pages left neutral-filled.
+    // untouched pages left neutral-filled. Each image is PNG-encoded
+    // immediately and its raw pixels dropped: a scene-mode atlas can carry
+    // dozens of full-size images, and holding them decoded exhausts memory
+    // on Windows (bad allocation) long before Linux's overcommit would.
+    bool emitOk = true;
     auto emit = [&](int mat, TexType t, const std::vector<Raster*>& pageLayers, int bits) {
+        if (!emitOk) return;
         bool any = false;
         for (Raster* r : pageLayers)
             if (r && !r->rgba.empty()) any = true;
@@ -471,6 +476,17 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
             std::memcpy(out.rgba.data() + size_t(p) * texW * texH * 4, r->rgba.data(),
                         size_t(texW) * texH * 4);
         }
+        Raster r;
+        r.w = out.w;
+        r.h = out.h;
+        r.rgba.swap(out.rgba);
+        std::vector<uint8_t> png;
+        if (!encodePng(r, png)) {
+            emitOk = false;
+            return;
+        }
+        out.raw = std::move(png);
+        out.decoded = false;  // out.rgba now empty; decode out.raw when needed
         outBaked.push_back(BakedImage{mat, t, std::move(out), bits});
     };
 
@@ -492,6 +508,10 @@ bool bakeGroup(const Model& model, const AtlasGroup& group, const AtlasGen& gen,
         for (const auto& fb : perMatFactorBits)
             if (fb.second & factorBit(TexType(t))) bits |= factorBit(TexType(t));
         emit(-1, TexType(t), ls, bits);
+    }
+    if (!emitOk) {
+        err = "failed to encode baked texture '" + group.name + "' to PNG";
+        return false;
     }
     return true;
 }
@@ -567,6 +587,18 @@ bool selfCheckGroup(const Model& model, const AtlasGroup& group, const AtlasGen&
                         ": no mappable triangles");
             continue;
         }
+        // Baked images are stored PNG-encoded; decode one at a time on demand.
+        Raster decoded;
+        if (b.image.rgba.empty()) {
+            std::string derr;
+            if (!decodeImage(b.image.raw, decoded, derr)) {
+                report.warn("self-check '" + group.name + "': cannot decode baked " +
+                            texTypeName(b.type) + " image");
+                continue;
+            }
+        }
+        const std::vector<uint8_t>& atlasPx =
+            b.image.rgba.empty() ? decoded.rgba : b.image.rgba;
         std::mt19937 rng(7u + size_t(b.material) * 131u + size_t(t) * 17u);
         std::uniform_int_distribution<size_t> pick(0, tris.size() - 1);
         std::uniform_real_distribution<float> urand(0.f, 1.f);
@@ -607,7 +639,7 @@ bool selfCheckGroup(const Model& model, const AtlasGroup& group, const AtlasGen&
             int py = int(std::clamp(av * scaleY, 0.f, float(texH - 1)));
             py += std::max(0, gv[0]->atlasIndex) * texH;
             if (py >= b.image.h) continue;
-            const uint8_t* bk = &b.image.rgba[(size_t(py) * b.image.w + px) * 4];
+            const uint8_t* bk = &atlasPx[(size_t(py) * b.image.w + px) * 4];
 
             // Expected source texel.
             float exp[4];
